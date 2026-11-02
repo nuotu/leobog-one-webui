@@ -2512,25 +2512,25 @@ $('logCopy').onclick = async () => {
   }
 };
 
-// ── 明暗主题（M HUB 风格双主题，localStorage 持久化）──
+// ── 明暗主题（始终跟随浏览器 / 系统）──
 {
-  const KEY = 'leobog-theme';
-  const apply = t => {
-    if (t === 'dark') document.documentElement.dataset.theme = 'dark';
+  const media = window.matchMedia
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null;
+  try {
+    localStorage.removeItem('leobog-theme');
+    localStorage.removeItem('leobog-theme-choice');
+  } catch (e) {}
+  const apply = isDark => {
+    if (isDark) document.documentElement.dataset.theme = 'dark';
     else delete document.documentElement.dataset.theme;
-    $('themeBtn').textContent = t === 'dark' ? '浅色' : '深色';
-    if ($('landTheme')) $('landTheme').textContent = t === 'dark' ? '浅色' : '深色';
-    try { localStorage.setItem(KEY, t); } catch (e) {}
   };
-  let init = 'light';
-  try { init = localStorage.getItem(KEY) || 'light'; } catch (e) {}
-  apply(init);
-  const toggle = () => {
-    const cur = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
-    apply(cur === 'dark' ? 'light' : 'dark');
-  };
-  $('themeBtn').onclick = toggle;
-  $('landTheme').onclick = toggle;
+  apply(Boolean(media && media.matches));
+  const syncSystemTheme = event => apply(event.matches);
+  if (media) {
+    if (media.addEventListener) media.addEventListener('change', syncSystemTheme);
+    else if (media.addListener) media.addListener(syncSystemTheme);
+  }
 }
 
 // ── 键位编辑器（常驻；点键盘选槽位，右侧点选即暂存，应用修改统一写入）──

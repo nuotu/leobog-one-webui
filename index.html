@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LEOBOG ONE</title>
+<script>
+  // 在样式加载前应用主题，避免深色模式首屏闪白。
+  (() => {
+    if (window.matchMedia
+      && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      document.documentElement.dataset.theme = 'dark';
+    }
+  })();
+</script>
 <style>
   /* ── 主题变量（M HUB 风格：CSS 变量驱动，浅/深双主题）── */
   :root {
@@ -120,8 +129,6 @@
   .dev-sub.bad { color: var(--bad); }
   .dev-go { flex: none; font-size: 13px; color: var(--accent); font-weight: 600; }
   .land-foot { margin-top: 14px; text-align: center; font-size: 12px; color: var(--muted); }
-  .land-theme { margin-top: 12px; }
-  .land-theme #landTheme { padding: 5px 16px; font-size: 13px; }
 
   /* ── 全局骨架：左侧边栏 + 右主区（16:9 全屏，页面不滚动）── */
   #app { display: flex; height: 100vh; }
@@ -137,8 +144,12 @@
   #nav button:hover { border-color: var(--line); background: var(--bg); }
   #nav button.on { background: var(--accent-soft); border-color: var(--accent);
                    color: var(--accent); font-weight: 600; }
-  #sidebar .side-foot { padding: 10px; border-top: 1px solid var(--line); }
-  #sidebar .side-foot button { width: 100%; margin: 0; }
+  #sidebar .side-foot { padding: 12px 14px; border-top: 1px solid var(--line);
+                        display: flex; align-items: center; justify-content: space-between;
+                        gap: 8px; color: var(--muted); font-size: 12px; }
+  #sidebar .side-foot a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  #sidebar .side-foot a:hover { text-decoration: underline; }
+  #sidebar .side-version { font-family: ui-monospace, Consolas, monospace; }
 
   #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   #topbar { flex: none; margin: 0; border-radius: 0; border-left: 0; border-right: 0; border-top: 0; }
@@ -524,7 +535,6 @@
       <div class="land-list" id="landList" style="display:none"></div>
       <div class="land-foot">找不到设备？试试重新插拔</div>
     </div>
-    <div class="land-theme"><button id="landTheme" title="切换 浅色/深色 主题">深色</button></div>
   </div>
 </div>
 
@@ -542,7 +552,9 @@
       <button data-sec="settings">设置</button>
     </nav>
     <div class="side-foot">
-      <button id="themeBtn" title="切换 浅色/深色 主题">深色</button>
+      <a href="https://github.com/nuotu/leobog-one-webui" target="_blank"
+         rel="noopener noreferrer" title="打开项目仓库">© nuotu</a>
+      <span class="side-version">v1.0.1</span>
     </div>
   </aside>
 
