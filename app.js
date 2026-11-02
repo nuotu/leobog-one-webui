@@ -23,12 +23,12 @@ const USAGE = (() => {
   const digits = '1234567890';
   '1234567890'.split('').forEach((c, i) => u[0x1e + i] = c);
   Object.assign(u, {
-    0x28: 'Enter', 0x29: 'Esc', 0x2a: 'Backspace', 0x2b: 'Tab', 0x2c: '空格',
+    0x28: 'Enter', 0x29: 'Esc', 0x2a: 'Backspace', 0x2b: 'Tab', 0x2c: 'Space',
     0x2d: '-', 0x2e: '=', 0x2f: '[', 0x30: ']', 0x31: '\\',
     0x33: ';', 0x34: "'", 0x35: '`', 0x36: ',', 0x37: '.', 0x38: '/', 0x39: 'CapsLock',
     0x46: 'PrtSc', 0x47: 'ScrLk', 0x48: 'Pause', 0x49: 'Ins', 0x4a: 'Home',
-    0x4b: 'PgUp', 0x4c: 'Del', 0x4d: 'End', 0x4e: 'PgDn', 0x4f: '→',
-    0x50: '←', 0x51: '↓', 0x52: '↑',
+    0x4b: 'PgUp', 0x4c: 'Delete', 0x4d: 'End', 0x4e: 'PgDn', 0x4f: 'Right',
+    0x50: 'Left', 0x51: 'Down', 0x52: 'Up',
     // 小键盘 / 菜单（调色板用）
     0x53: 'NumLk', 0x54: 'Num/', 0x55: 'Num*', 0x56: 'Num-', 0x57: 'Num+',
     0x58: 'NumEnter', 0x59: 'Num1', 0x5a: 'Num2', 0x5b: 'Num3',
@@ -56,10 +56,10 @@ const PALETTE = {
   })(),
   Adv: [
     ...Array.from({ length: 12 }, (_, i) => [0x3a + i, 'F' + (i + 1)]),
-    [0x29, 'Esc'], [0x2b, 'Tab'], [0x65, 'App'], [0x49, 'Ins'], [0x4d, 'End'], [0x4c, 'Del'],
+    [0x29, 'Esc'], [0x2b, 'Tab'], [0x65, 'App'], [0x49, 'Ins'], [0x4d, 'End'], [0x4c, USAGE[0x4c]],
     [0x4e, 'PgDn'], [0x4b, 'PgUp'], [0x2a, 'Backspace'], [0x4a, 'Home'], [0x39, 'CapsLock'],
-    [0x48, 'Pause'], [0x28, 'Enter'], [0x2c, '空格'], [0x46, 'PrtSc'], [0x47, 'ScrLk'],
-    [0x50, '←'], [0x4f, '→'], [0x52, '↑'], [0x51, '↓'],
+    [0x48, 'Pause'], [0x28, 'Enter'], [0x2c, USAGE[0x2c]], [0x46, 'PrtSc'], [0x47, 'ScrLk'],
+    [0x50, USAGE[0x50]], [0x4f, USAGE[0x4f]], [0x52, USAGE[0x52]], [0x51, USAGE[0x51]],
   ],
   Keypad: [
     [0x62, 'Num0'], [0x59, 'Num1'], [0x5a, 'Num2'], [0x5b, 'Num3'],
@@ -97,13 +97,21 @@ const SPECIAL_GROUPS = [
     ['显示桌面', [0x00, 0x08, 0x07, 0], 'Win+D'],
     ['锁定计算机', [0x00, 0x08, 0x0f, 0], 'Win+L'],
     ['运行命令', [0x00, 0x08, 0x15, 0], 'Win+R'],
-    ['任务管理器', [0x00, 0x05, 0x4c, 0], 'Ctrl+Alt+Del'],
+    ['任务管理器', [0x00, 0x05, 0x4c, 0], 'Ctrl+Alt+Delete'],
     ['放大', [0x00, 0x01, 0x2e, 0], 'Ctrl+='],
     ['缩小', [0x00, 0x01, 0x2d, 0], 'Ctrl+-'],
   ] },
   { name: '层', items: [
-    ['Fn', [0x0d, 0, 0, 0], '按住进 FN1 层'],
-    ['Fn2', [0x0d, 1, 0, 0], '按住进 FN2 层'],
+    ['FN', [0x0d, 0, 0, 0], '按住进 FN1 层'],
+    ['FN2', [0x0d, 1, 0, 0], '按住进 FN2 层'],
+  ] },
+  { name: '键盘功能', items: [
+    ['灯效切换', [0x08, 0, 0, 0], '切换键盘灯效'],
+    ['颜色切换', [0x08, 2, 0, 0], '切换当前灯效颜色'],
+    ['亮度+', [0x08, 3, 1, 0], '提高键盘灯光亮度'],
+    ['亮度-', [0x08, 3, 2, 0], '降低键盘灯光亮度'],
+    ['速度+', [0x08, 4, 1, 0], '加快键盘灯效速度'],
+    ['速度-', [0x08, 4, 2, 0], '减慢键盘灯效速度'],
   ] },
   { name: '鼠标', items: [
     ['左键', [0x01, 1, 0x01, 0], '鼠标左键单击'],
@@ -139,7 +147,7 @@ const EV2USAGE = (() => {
   const dig = '1234567890';
   dig.split('').forEach((c, i) => { m['Digit' + c] = 0x1e + i; });
   Object.assign(m, {
-    Enter: 0x28, Backspace: 0x2a, Tab: 0x2b, Space: 0x2c, Minus: 0x2d, Equal: 0x2e,
+    Enter: 0x28, Escape: 0x29, Backspace: 0x2a, Tab: 0x2b, Space: 0x2c, Minus: 0x2d, Equal: 0x2e,
     BracketLeft: 0x2f, BracketRight: 0x30, Backslash: 0x31, Semicolon: 0x33,
     Quote: 0x34, Backquote: 0x35, Comma: 0x36, Period: 0x37, Slash: 0x38, CapsLock: 0x39,
     PrintScreen: 0x46, ScrollLock: 0x47, Pause: 0x48, Insert: 0x49, Home: 0x4a,
@@ -158,8 +166,8 @@ const EV2USAGE = (() => {
   return m;
 })();
 
-// 键名归一：布局里的键名 ≠ usage 名（Space/空格、Delete/Del、Up/↑、Fn/FN…）时算同一个键，
-// 否则"没改过的键"也会多出一条别称（Space 底下挂"空格"、Up 底下挂"↑"）。
+// 键名归一：兼容历史标签和缩写（空格/Space、Delete/Del、Up/↑、Fn/FN…），
+// 否则旧配置或别名会被误判为不同按键。
 const KEY_ALIAS = {
   '空格': 'space', space: 'space',
   del: 'delete', delete: 'delete',
@@ -182,6 +190,21 @@ function sameKey(a, b) {
   const x = n(a), y = n(b);
   if (x === y) return true;
   return KEY_ALIAS[x] !== undefined && KEY_ALIAS[x] === KEY_ALIAS[y];
+}
+function keyBindingDisplay(rec, physicalLabel, untouched) {
+  if (rec.empty) return { bind: '未绑定', cls: 'empty' };
+  if (untouched) return { bind: '', cls: '' };
+  if (sameKey(rec.label, physicalLabel))
+    return { bind: '', cls: rec.type !== 0x00 ? 'special' : '' };
+  return { bind: rec.label, cls: (rec.type !== 0x00 || rec.plainMod) ? 'special' : '' };
+}
+function editorTypeForRecord(rec) {
+  if (rec[0] === 0x03) return 'macro';
+  if (rec[0] === 0x07 && rec[1]) return 'combo';
+  if (rec[0] === 0x01 || rec[0] === 0x02 || rec[0] === 0x08 || rec[0] === 0x0d ||
+      (rec[0] === 0x07 && !rec[1]) ||
+      (rec[0] === 0x00 && rec[2] !== 0 && rec[3] === 0)) return 'special';
+  return 'normal';
 }
 
 // ── 记录解码 [type][mod][x][usage] ──────────────────────────
@@ -258,7 +281,7 @@ function decodeRecord(b, off = 0) {
   }
   else if (type === 0x0d) {                                 // 层切换键（按住进 FN 层）：[1]=目标层
     const lv = b[off + 1];
-    core = lv === 0 ? 'Fn' : (lv === 1 ? 'Fn2' : ('层' + lv));
+    core = lv === 0 ? 'FN' : (lv === 1 ? 'FN2' : ('层' + lv));
   }
   else if (type === 0x09) core = 'fn:' + hexs(b.slice(off, off + 4));
   else core = '#' + type.toString(16) + ':' + hexs(b.slice(off, off + 4));
@@ -292,26 +315,85 @@ const S = {
   lightSel: null,       // 灯效页选中模式
   lightColor: '#66ccff', // 调色盘默认色（页面暂存；自定义单色时写入色帧）
   lightHsv: [0, 1, 1],   // 调色盘 HSV 源状态（拖拽用；避免 hex 往返量化导致点位漂移）
+  lightColorKnown: false, // 当前模式调色盘是否来自设备块或本地明确选择
   lightPresetIdx: null,  // 快捷色高亮（纯 UI；不写设置块）
   colorDirty: false,
+  colorLoaded: false,   // 色帧是否从设备可信读回；false 时禁止创建全黑帧覆盖设备
   macroRaw: null,       // 宏区 512B
   macroSlots: null,
   macroDraft: null,     // 解析后 8 槽
   macroEditSlot: null,
   ledPush: false,       // 恢复出厂时置位：applyAll 推灯效参数块（官方同款）
-  ledColorRgb: null,    // 单色 RGB [r,g,b]：应用时注入参数块并推送
-  ledColorSlot: null,   // 待写颜色的模式号 → 参数块颜色槽 = 21+(mode-1)*21
+  ledRestoreBlock: null,// 备份恢复用完整 512B 参数块
+  ledColorPending: new Map(), // 模式号 → 待写 RGB；切换模式不丢草稿
+  ledBlock: null,       // 可信的 512B 灯效参数块（用于逐模式颜色与备份）
   colorBase: null,      // 自定义模式：已提交的逐键色帧（应用成功/读回时更新）
   eraser: false,        // 自定义模式：橡皮开关（点击/划选=擦除）
   customInit: false,    // 自定义模式的选中集是否已从设备色帧初始化
   section: 'keys',      // 当前导航页（keys/light/music/macro/settings）
 };
+// 自检恢复快照独立于编辑草稿：重读、换设备、放弃草稿都不能清除它。
+let selfTestRecovery = null;
 
 // Array.from：Uint8Array 走 .map 会把回调返回的字符串强转回数字（"66 0 0" 的由来）
 const hexs = a => Array.from(a, b => (b & 0xff).toString(16).padStart(2, '0')).join(' ');
 const toHex = a => Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
 const fromHex = s => Uint8Array.from(s.match(/../g).map(h => parseInt(h, 16)));
-const countNonzeroSlots = c => { let n = 0; for (let i = 0; i + 2 < c.length; i += 3) if (c[i] || c[i+1] || c[i+2]) n++; return n; };
+const countNonzeroSlots = c => {
+  let n = 0;
+  for (let s = 0; s < 126; s++) if (c[s] || c[126 + s] || c[252 + s]) n++;
+  return n;
+};
+function hasPendingDrafts() {
+  return S.kmDirty.some(Boolean) || S.setOps.length > 0 || S.lightOps.length > 0 ||
+    S.colorDirty || S.ledColorPending.size > 0 || !!S.ledRestoreBlock || S.ledPush || macroDraftDirty();
+}
+function hasSelfTestRecovery() {
+  return !!(selfTestRecovery &&
+    (selfTestRecovery.colorPending || selfTestRecovery.ledPending || selfTestRecovery.reloadPending));
+}
+function selfTestRecoveryMatchesDevice(snapshot = selfTestRecovery) {
+  return !!snapshot && !!snapshot.deviceKey && !!Leobog.state.dev &&
+    snapshot.deviceKey === Leobog.devKey(Leobog.state.dev);
+}
+function hasPendingChanges() {
+  return hasPendingDrafts() || hasSelfTestRecovery();
+}
+function canWriteConfiguration() {
+  if (!hasSelfTestRecovery()) return true;
+  Leobog.log('自检原值尚未确认恢复，普通写入已暂停；请点击「恢复自检原值」或先导出恢复备份', 'warn');
+  return false;
+}
+function discardPendingDrafts() {
+  S.kmDirty = [false, false, false, false];
+  S.setOps = []; S.lightOps = []; S.setDirty = false;
+  S.colorDirty = false; S.ledColorPending.clear(); S.ledRestoreBlock = null; S.ledPush = false;
+  closeMacroEditor();
+  updateDirtyUI();
+}
+function beginApplying(opts = {}) {
+  if (applying) return false;
+  if (!opts.selfTestRecovery && !canWriteConfiguration()) return false;
+  if (opts.selfTestRecovery && !selfTestRecoveryMatchesDevice()) {
+    Leobog.log('当前不是自检时的原设备，拒绝恢复写入；原始快照仍保留，可导出恢复备份', 'bad');
+    return false;
+  }
+  applying = true;
+  $('app').classList.add('applying');
+  updateDirtyUI();
+  return true;
+}
+function endApplying(flush = true) {
+  applying = false;
+  $('app').classList.remove('applying');
+  updateDirtyUI();
+  if (flush) flushPendingUnsol();
+}
+window.addEventListener('beforeunload', e => {
+  if (!hasSelfTestRecovery()) return;
+  e.preventDefault();
+  e.returnValue = '';                          // 不在卸载事件中尝试异步 Flash 写入。
+});
 
 // ── 出厂数据（web/data/factory.js：从 fw/hi8/hi8_fw_backup.hex 提取；两型号配置区一致）──
 // 恢复出厂 = 固件真·出厂镜像：设置块 @0xC400 + 键表 Win 四页 @0xCC00/D000/D400/D600（含尾 5A A5）。
@@ -336,6 +418,7 @@ Leobog.onDisconnect = () => {
   updateDirtyUI();
   // 接收器拔出 = HID 句柄丢失，插回是新设备——不自动回连，重新插入后手动点卡片（用户拍板）
   recover = false;
+  recoverKeepDraft = false;
   showLanding('设备已断开——重新插入后请在设备列表中点击进入');
 };
 
@@ -346,6 +429,7 @@ function showWorkspace() {
   fitKeyboard();
 }
 function showLanding(msg) {
+  stopPreview();
   $('app').style.display = 'none';
   $('landing').style.display = '';
   if (msg) $('landStatus').innerHTML = `<span class="warn">${msg}</span>`;
@@ -358,6 +442,7 @@ function showLanding(msg) {
 // 其余时刻一律停在选择界面（识别到的设备以型号卡片列表展示）。
 let recover = false;           // 断连恢复标记（true=恢复后自动回配置页）
 let recoverKey = null;         // 断连设备 vendor:productId
+let recoverKeepDraft = false;  // 同一 HID 句柄休眠唤醒时保留本地未应用草稿
 let lastDevKey = null;         // 当前会话设备 key
 let connecting = false;        // 连接/识别进行中
 let applying = false;          // 写入进行中（applyAll/宏写；探测心跳需跳过）
@@ -401,9 +486,10 @@ async function identifyModel(retries) {
 }
 
 // 附着 → 识别 → 读配置 → 进配置页。休眠=停选择页并置 recover（唤醒自动恢复）。
-async function enterFromDevice(retries = 3) {
+async function enterFromDevice(retries = 3, opts = {}) {
   connecting = true;
   try {
+    const previousModel = S.modelName;
     $('landStatus').innerHTML = '<span class="muted">已连接，正在识别设备…</span>';
     const id = await identifyModel(retries);
     if (!id.ok) {
@@ -413,6 +499,7 @@ async function enterFromDevice(retries = 3) {
         await Leobog.disconnect();
         S.channel = null;
         recover = false;
+        recoverKeepDraft = false;
         updateDirtyUI();
         setConnStatus('未连接');
         $('connectBtn').textContent = '连接键盘';
@@ -422,14 +509,21 @@ async function enterFromDevice(retries = 3) {
       Leobog.log('设备无响应，可能在休眠——停在选择界面，唤醒后自动恢复', 'warn');
       recover = true;
       recoverKey = lastDevKey;
+      recoverKeepDraft = hasPendingChanges();
       setConnStatus('<span class="warn">● 键盘休眠中</span>');
       showLanding('键盘处于休眠状态——请按任意键唤醒，唤醒后自动恢复配置界面');
       return false;
     }
     $('landStatus').innerHTML = '<span class="muted">正在读取配置…</span>';
-    await afterModel();
+    if (opts.preserveDraft && hasPendingChanges() && previousModel === S.modelName) {
+      Leobog.log('同一设备休眠恢复：保留本地未应用修改，不重新读取覆盖草稿', 'warn');
+      renderSettings(); renderLight(); renderKeymap(S.curLayer); updateDirtyUI();
+    } else {
+      await afterModel();
+    }
     $('landStatus').innerHTML = '点击下方按钮，在弹出的设备列表中选择并连接';
     recover = false;
+    recoverKeepDraft = false;
     // 顶栏状态刷新（恢复路径若句柄未重开会跳过 setConnStatus，这里兜底消除"键盘休眠中"残留）
     {
       const d = Leobog.state.dev;
@@ -518,7 +612,7 @@ function selectLoopStart() {
       wakeTimer = setTimeout(() => selectTick(), 2000);
       return;
     }
-    if (connecting) { wakeTimer = setTimeout(() => selectTick(), 800); return; }
+    if (connecting || applying) { wakeTimer = setTimeout(() => selectTick(), 800); return; }
     selectBusy = true;
     try {
       const known = await Leobog.knownDevices();
@@ -534,6 +628,7 @@ function selectLoopStart() {
       if (cards.length && recover) {
         // 恢复路径（休眠唤醒 / 拔插重现）：附着 → 探活 → 自动回配置页
         const target = (recoverKey && cards.find(c => c.key === recoverKey)) || cards[0];
+        const preserveDraft = recoverKeepDraft && target.key === recoverKey;
         const cur = Leobog.state.dev;
         if (!(cur && cur.opened && cur === target.dev)) {
           const info = await Leobog.selectDevice(target.dev);
@@ -544,7 +639,7 @@ function selectLoopStart() {
         const alive = target.kind === 'wired' ? true : await probeKeyboard();
         if (alive) {
           Leobog.log('设备已恢复——自动回到配置界面', 'ok');
-          await enterFromDevice(2);
+          await enterFromDevice(2, { preserveDraft });
           // 不可提前 return：必须落入 finally 清 selectBusy，否则恢复守卫永久卡死（后台唤醒卡死根因）
         } else {
           target.state = 'sleep';
@@ -573,11 +668,16 @@ $('landList').onclick = async e => {
   if (!row || connecting || selectBusy) return;     // 探测轮进行中不响应点击（稍后可再点）
   const c = cards[Number(row.dataset.i)];
   if (!c) return;
+  if (hasPendingDrafts()) {
+    if (!confirm('当前有未应用修改。进入设备会重新读取并丢弃这些草稿，继续？')) return;
+    discardPendingDrafts();
+  }
   const land = $('landBtn');
   row.classList.add('busy');
   land.disabled = true;
   connecting = true;
   recover = false;
+  recoverKeepDraft = false;
   try {
     const info = await Leobog.selectDevice(c.dev);
     S.channel = info.channel;
@@ -601,6 +701,7 @@ async function manualConnect() {
   try {
     await Leobog.connect();                        // 授权 + 附着
     recover = false;
+    recoverKeepDraft = false;
     await Leobog.disconnect();                     // 仅完成授权，回选择页等点击
     setConnStatus('未连接');
     $('landStatus').innerHTML = '已授权——请在设备列表中点击进入';
@@ -617,8 +718,13 @@ async function manualConnect() {
 }
 $('connectBtn').onclick = async () => {
   if (Leobog.state.dev) {
+    if (hasPendingDrafts()) {
+      if (!confirm('当前有未应用修改。退出配置后再次进入会丢弃这些草稿，继续？')) return;
+      discardPendingDrafts();
+    }
     // 配置页主动退出 → 回选择界面（recover=false：不自动恢复，等手动点击）
     recover = false;
+    recoverKeepDraft = false;
     stopMusic();
     S.channel = null;
     updateDirtyUI();
@@ -656,6 +762,7 @@ async function deviceProbe(strict) {
     Leobog.log('键盘无响应——判定已休眠，回到选择界面等待唤醒', 'warn');
     recover = true;
     recoverKey = lastDevKey;
+    recoverKeepDraft = hasPendingChanges();
     setConnStatus('<span class="warn">● 键盘休眠中</span>');
     showLanding('键盘已休眠——请按任意键唤醒，唤醒后自动恢复当前页面');
   } else if (strict) {
@@ -677,6 +784,7 @@ function unsolAct(status) {
     Leobog.log('休眠推送 → 回到选择界面等待唤醒', 'warn');
     recover = true;
     recoverKey = lastDevKey;
+    recoverKeepDraft = hasPendingChanges();
     setConnStatus('<span class="warn">● 键盘休眠中</span>');
     showLanding('键盘已休眠——请按任意键唤醒，唤醒后自动恢复当前页面');
   } else {
@@ -741,13 +849,16 @@ document.addEventListener('visibilitychange', () => {
 async function afterModel() {
   stopMusic();                                 // 重读期间停流，避免和读命令抢通道
   // 重置编辑态（每次连接/换型后）
+  S.settings = null; S.keymap = [null, null, null, null];
+  S.color = null; S.colorBase = null; S.colorLoaded = false; S.ledBlock = null;
   S.kmDirty = [false, false, false, false];
   S.setOps = []; S.lightOps = []; S.lightSel = null; S.setDirty = false;
   S.colorDirty = false; S.sel = null; S.curLayer = 0;
+  S.ledColorPending.clear(); S.ledRestoreBlock = null; S.ledPush = false;
+  S.lightPresetIdx = null; S.lightColorKnown = false; S.eraser = false;
   S.customInit = false;                              // 自定义画布随重读重建
   lastLayerOnTabs = 0;
   S.macroRaw = null; S.macroSlots = null; S.macroEditSlot = null;
-  S.ledPush = false;
   closeMacroEditor();
   document.querySelectorAll('#layerTabs button').forEach((x, i) => x.classList.toggle('on', i === 0));
   closeEditor();
@@ -767,34 +878,38 @@ async function afterModel() {
     }
     renderSettings();
     S.lightSel = S.settings[10];
-    renderLight();
+    // 灯效页延后到色帧与 LED 参数块读取完成后再渲染，避免短暂误报“无可信色帧”。
   } catch (e) {
+    S.settings = null;
     Leobog.log('设置读取失败：' + (e.message || e), 'bad');
     if ($('setKeys')) $('setKeys').innerHTML =
       `<span class="bad">设置读取失败：设备无响应。</span><br>` +
       `<span class="muted">请按任意键唤醒键盘，然后点「重新读取」。</span>`;
+    throw new Error('设置块读取失败，已停止进入配置页，避免沿用旧设备缓存');
   }
   // 色帧（编辑灯色用；失败不影响其它功能）
   try {
     Leobog.log('读取色帧…');
     S.color = await Leobog.readColor();
     S.colorBase = S.color ? S.color.slice() : null;      // 底稿=设备当前逐键色
+    S.colorLoaded = !!S.color;
     if (S.color) {
       Leobog.log(`色帧 ${S.color.length}B ✅（非零槽 ${countNonzeroSlots(S.color)}）`);
       // 对照官方驱动：是否把整帧刷成同一颜色（首槽/尾槽 + 是否全同）
       let same = true;
-      const r0 = S.color[0], g0 = S.color[1], b0 = S.color[2];
-      for (let i = 3; i + 2 < S.color.length; i += 3) {
-        if (S.color[i] !== r0 || S.color[i + 1] !== g0 || S.color[i + 2] !== b0) { same = false; break; }
+      const r0 = S.color[0], g0 = S.color[126], b0 = S.color[252];
+      for (let s = 1; s < 126; s++) {
+        if (S.color[s] !== r0 || S.color[126 + s] !== g0 || S.color[252 + s] !== b0) { same = false; break; }
       }
       const seen = new Map();
-      for (let i = 0; i + 2 < S.color.length; i += 3) {
-        const k = (S.color[i] << 16) | (S.color[i + 1] << 8) | S.color[i + 2];
+      for (let s = 0; s < 126; s++) {
+        const k = (S.color[s] << 16) | (S.color[126 + s] << 8) | S.color[252 + s];
         seen.set(k, (seen.get(k) || 0) + 1);
       }
       const top = [...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
         .map(([k, n]) => '#' + k.toString(16).padStart(6, '0') + '×' + n).join(' ');
-      if (DEBUG) Leobog.log(`[色帧] 首槽=${hexs(S.color.slice(0, 3))} 尾槽=${hexs(S.color.slice(-3))} 全帧同色=${same ? '是' : '否'} 不同色=${seen.size} 主要=${top}`);
+      if (DEBUG) Leobog.log(`[色帧] 首槽=${hexs([S.color[0], S.color[126], S.color[252]])} ` +
+        `尾槽=${hexs([S.color[125], S.color[251], S.color[377]])} 全帧同色=${same ? '是' : '否'} 不同色=${seen.size} 主要=${top}`);
       // 列出所有点亮的像素（平面 RGB：像素=键表槽），对照"键盘实际哪些键亮"
       {
         const P = 126;
@@ -808,7 +923,7 @@ async function afterModel() {
       }
     }
   } catch (e) {
-    S.color = null; S.colorBase = null;
+    S.color = null; S.colorBase = null; S.colorLoaded = false;
     Leobog.log('色帧读取失败：' + (e.message || e) + '灯色编辑暂不可用', 'warn');
   }
   // 灯效参数块（0x8a/0x49）：只做体检，不参与写路径
@@ -818,16 +933,21 @@ async function afterModel() {
     let led = await Leobog.readLed();
     if (!sane(led)) { await new Promise(r => setTimeout(r, 250)); led = await Leobog.readLed().catch(() => null); }
     if (!sane(led)) {
+      S.ledBlock = null;
       Leobog.log('[LED] 参数块读回不可信（全零/无 5A A5），本次体检跳过（写色时会重新校验）', 'warn');
     } else {
+      S.ledBlock = led.slice(0, 512);
       const nz = led.reduce((s, v) => s + (v ? 1 : 0), 0);
       if (DEBUG) Leobog.log(`[LED] 设备当前 [21..23]=${hexs(led.slice(21, 24))} · 模式色槽[42..44]=${hexs(led.slice(42, 45))} ` +
         `非零=${nz}/512 尾[504..511]=${hexs(led.slice(504, 512))}`, 'ok');
       else Leobog.log(`[LED] 参数块 OK（常亮槽 ${hexs(led.slice(21, 24))}）`, 'ok');
     }
   } catch (e) {
+    S.ledBlock = null;
     Leobog.log('灯效参数块读取失败：' + (e.message || e), 'warn');
   }
+  syncLightColorFromMode(S.lightSel != null ? S.lightSel : (S.settings ? S.settings[10] : null));
+  renderLight();
   // 宏区（有线 0x85 / 无线 0x43；失败不影响其它功能）
   try {
     Leobog.log('读取宏区…');
@@ -885,13 +1005,17 @@ async function afterModel() {
   updateDirtyUI();
   $('refreshBtn').disabled = false;
   flushPendingUnsol();                             // 读取完成=空闲点：补跑忙时挂起的推送
-  Leobog.log('已就绪：点键位可编辑，完成后点「应用修改」，写入后会读回校验', 'ok');
+  Leobog.log(hasSelfTestRecovery()
+    ? '读取完成：自检原值仍待恢复，普通写入已暂停；原始恢复快照没有被重新读取覆盖'
+    : '已就绪：点键位可编辑，完成后点「应用修改」，写入后会读回校验',
+    hasSelfTestRecovery() ? 'warn' : 'ok');
 }
 
 // ── 重新读取（复用已授权设备，免弹窗）────────────────────────
 $('refreshBtn').onclick = async () => {
+  if (applying) return;
   const btn = $('refreshBtn');
-  const dirty = S.kmDirty.some(Boolean) || S.setDirty || S.colorDirty;
+  const dirty = hasPendingDrafts();
   if (dirty && !confirm('有未应用的修改，重新读取会丢弃这些改动。继续？')) return;
   btn.disabled = true;
   try {
@@ -1153,6 +1277,26 @@ function hsvToRgb(h, s, v) {
 function lightColor() {
   return S.lightColor || '#66ccff';
 }
+function ledColorOffset(mode) {
+  const k = Math.min(Math.max(mode || 1, 1), 19);
+  return 21 + (k - 1) * 21;
+}
+function colorForMode(mode) {
+  const pending = S.ledColorPending.get(mode);
+  if (pending) return pending.slice();
+  if (!S.ledBlock || mode < 1 || mode > 19) return null;
+  const off = ledColorOffset(mode);
+  return Array.from(S.ledBlock.slice(off, off + 3));
+}
+function syncLightColorFromMode(mode) {
+  const rgb = colorForMode(mode);
+  if (!rgb) { S.lightColorKnown = false; return; }
+  S.lightColor = rgbToHex(rgb[0], rgb[1], rgb[2]);
+  S.lightHsv = rgbToHsv(...rgb);
+  S.lightColorKnown = true;
+  S.lightPresetIdx = CP_PRESETS.findIndex(p => p.hex.toLowerCase() === S.lightColor.toLowerCase());
+  if (S.lightPresetIdx < 0) S.lightPresetIdx = null;
+}
 // 调色盘下方的提示文案（随模式/多彩状态变化；取色自动转单色时也要跟着刷新）
 function lightHintText() {
   const sel = S.lightSel;
@@ -1167,6 +1311,7 @@ function lightHintText() {
   const rd = !noParam && (disp[sIdx] & 0x0f) !== 0;
   let hint;
   if (sel === 0) hint = '灯效已关闭。启用任一灯效模式后，可在此调节颜色。';
+  else if (sel !== 21 && cap.color && !S.lightColorKnown) hint = '当前模式颜色未能从设备读取，已禁用选色以避免覆盖未知通道；请重新读取设备。';
   else if (pickOff) hint = '该灯效由键盘固件生成固定彩虹效果，不支持单色与多彩调节。';
   else if (sel === 21) hint = '逐键上色：点击或拖选按键上色；同色再点可擦除；「橡皮」开启后为擦除。';
   else if (rd) hint = '已启用多彩：灯光颜色将随机变化；选取具体颜色会自动切换回单色。';
@@ -1200,6 +1345,7 @@ function ensureSingleColor() {
 function setLightColor(hex, opts = {}) {
   ensureSingleColor();
   S.lightColor = hex;
+  S.lightColorKnown = true;
   S.lightHsv = rgbToHsv(...hexToRgb(hex));
   if (!opts.fromPreset) S.lightPresetIdx = null;   // 手动取色 → 快捷色高亮失效
   if (opts.regen !== false) updateColorPicker();
@@ -1207,6 +1353,7 @@ function setLightColor(hex, opts = {}) {
 }
 function setLightColorHsv(h, s, v) {
   ensureSingleColor();
+  S.lightColorKnown = true;
   S.lightHsv = [h, s, v];
   const [r, g, b] = hsvToRgb(h, s, v);
   S.lightColor = rgbToHex(r, g, b);
@@ -1245,12 +1392,13 @@ function updateColorPicker() {
 function stageLightColor() {
   const rdEl = $('ltMulti');
   if (rdEl && rdEl.classList.contains('on')) {
-    S.ledColorRgb = null; S.ledColorSlot = null;
+    if (S.lightSel != null) S.ledColorPending.delete(S.lightSel);
+    updateDirtyUI();
     return;
   }
   if (S.lightSel == null) return;
   if (S.lightSel !== 21 && !lightCap(S.lightSel).color) {
-    S.ledColorRgb = null; S.ledColorSlot = null;                 // 固定彩虹模式无单色：撤销待写色
+    S.ledColorPending.delete(S.lightSel);                         // 固定彩虹模式无单色：撤销待写色
     S.lightPresetIdx = null;
     updateDirtyUI();
     return;
@@ -1266,11 +1414,10 @@ function stageLightColor() {
   }
   if (S.lightSel === 21) {
     // 自定义：画笔式——改调色盘颜色不会回头改已涂的键，只有点击/划选才上色
-    S.ledColorRgb = null; S.ledColorSlot = null;
+    S.ledColorPending.delete(S.lightSel);
     paintCustomKeys();
   } else {
-    S.ledColorRgb = rgb;
-    S.ledColorSlot = S.lightSel;                                 // 颜色槽按模式：21+(mode-1)*21
+    S.ledColorPending.set(S.lightSel, rgb);                       // 每个模式独立暂存
     paintCustomKeys();                                           // 离开自定义模式时摘掉上色画布样式
   }
   updateDirtyUI();
@@ -1282,7 +1429,7 @@ function stageLightColor() {
 //   例：Space(键表槽35) 设红 → 只有字节 35 = 255；数字行 "1"(槽7) → 字节 7/133/259。
 const FRAME_PLANE = 126;
 function inCustomColorMode() {
-  return S.section === 'light' && S.lightSel === 21 && !!S.model;
+  return S.section === 'light' && S.lightSel === 21 && !!S.model && S.colorLoaded && !!S.color;
 }
 // 画笔式：所有上色只改本地工作帧 S.color，最后统一「应用修改」一次写入
 function paintCustomKeys() {
@@ -1330,9 +1477,14 @@ function updatePaintCount() {
 }
 // 进入自定义模式：工作帧=设备当前逐键色；调色盘默认取出现最多的颜色
 function initCustomCanvas() {
-  if (!S.colorBase && S.color) S.colorBase = S.color.slice();
-  S.color = S.colorBase ? S.colorBase.slice() : new Uint8Array(FRAME_PLANE * 3);
-  S.colorDirty = false;
+  if (!S.colorLoaded || !S.colorBase) {
+    Leobog.log('色帧没有可信读回，已禁用自定义逐键编辑，避免用全黑帧覆盖设备颜色', 'bad');
+    return false;
+  }
+  if (!S.colorDirty || !S.color) {
+    S.color = S.colorBase.slice();
+    S.colorDirty = false;
+  }
   const counts = new Map();
   for (const k of (S.model ? S.model.keys : [])) {
     const hex = frameColorAt(k.slot);
@@ -1345,6 +1497,7 @@ function initCustomCanvas() {
   }
   paintCustomKeys();
   updateDirtyUI();
+  return true;
 }
 
 // 快捷色：与手动取色等价（只改当前模式色槽 + [19] 预设索引）。
@@ -1394,8 +1547,7 @@ function renderLight() {
   modesHost.innerHTML = `<div class="lt-grid">${items.join('')}</div>`;
   renderLightNotes();
   // 设备本来就在自定义模式时，首次进入灯效页也要恢复选中集（非黑槽=已上色）
-  if (sel === 21 && !S.customInit) { initCustomCanvas(); S.customInit = true; }
-  if (sel !== 21) S.customInit = false;
+  if (sel === 21 && !S.customInit && initCustomCanvas()) S.customInit = true;
   renderLightParams();
   paintCustomKeys();
   updatePreview();
@@ -1424,7 +1576,7 @@ function renderLightNotes() {
   const pickOff = sel !== 21 && !cap.color;
   const noParam = sel === 0 || sel === 21;
   const curBad = cur != null && LIGHT_FW_UNSUPPORTED.has(cur);
-  const dirty = S.lightOps.length > 0 || S.colorDirty || !!S.ledColorRgb;
+  const dirty = S.lightOps.length > 0 || S.colorDirty || S.ledColorPending.size > 0 || !!S.ledRestoreBlock || S.ledPush;
   host.innerHTML = `
     <div class="lt-note">设备当前模式：<b>${lightModeName(cur)}</b>${curBad
       ? ' <span class="warn">固件不支持，请切换</span>' : ''} · 本地待写入：<b>${lightModeName(sel)}</b>。修改即时暂存。${dirty
@@ -1440,11 +1592,17 @@ function renderLightParams() {
   const disp = p.slice();
   for (const op of S.lightOps) { try { op.fn(disp); } catch (e) {} }
   const sel = S.lightSel;
+  if (sel === 21 && !S.colorLoaded) {
+    lp.innerHTML = '<span class="bad">逐键色帧读取失败，已禁用自定义编辑。请唤醒设备后点「重新读取」。</span>';
+    renderLightNotes();
+    return;
+  }
   const { bIdx, sIdx } = lightParamIdx(sel);
   const br = disp[bIdx], sp = disp[sIdx] >> 4;
   const noParam = sel === 0 || sel === 21;
   const cap = lightCap(sel);
-  const pickOff = sel !== 21 && !cap.color;          // 固定彩虹模式：无选色/多彩
+  const colorUnknown = sel !== 21 && cap.color && !S.lightColorKnown;
+  const pickOff = (sel !== 21 && !cap.color) || colorUnknown; // 固定彩虹或颜色基底未知
   const rd = !noParam && (disp[sIdx] & 0x0f) !== 0;  // 低 3 位：7=多彩 / 0=单色（官方实写值）
   const dirtyMode = S.lightOps.some(o => o.row === 'ltMode');
   const dirtyParam = S.lightOps.some(o => o.row === 'ltBright' || o.row === 'ltSpeed');
@@ -1597,13 +1755,21 @@ function stageLightOps() {
   const curRd = (p[sIdx] & 0x0f) !== 0;
   if ((Number.isInteger(sp) && sp !== (p[sIdx] >> 4)) || rd !== curRd)
     S.lightOps.push({ key: `速度/多彩 ${m}`, row: 'ltSpeed', m,
-      fn: b => { b[sIdx] = (sp << 4) | (rd ? 0x07 : 0x00); } });
+      fn: b => {
+        b[sIdx] = (sp << 4) | (rd ? 0x07 : 0x00);
+        if (rd) b[19] = 7;
+        else if (b[19] === 7) b[19] = nearestLedPreset(hexToRgb(lightColor()));
+      } });
   S.setDirty = S.setOps.length > 0 || S.lightOps.length > 0;
   updateDirtyUI();
 }
 
 function stageLightMode(hw) {
   if (LIGHT_FW_UNSUPPORTED.has(hw)) { Leobog.log(`模式 ${hw} 固件不支持（实测写入无效），已跳过`, 'bad'); return; }
+  if (hw === 21 && !S.colorLoaded) {
+    Leobog.log('色帧读取失败，不能进入自定义模式；请先重新读取设备', 'bad');
+    return;
+  }
   S.lightSel = hw;
   S.lightOps = S.lightOps.filter(o => o.row !== 'ltMode');
   // 选回设备当前模式 = 没有改动，不再挂"待写入"（避免什么都没改也提示未应用）
@@ -1615,16 +1781,11 @@ function stageLightMode(hw) {
       else if (b[9] === 1) b[9] = 0;
     } });
   }
-  // 切模式不连带写颜色：每个模式在参数块里有自己的颜色槽，切模式时写"当前调色盘颜色"
-  // 会把该模式原有颜色冲掉（实测：模式2 的 00 23 ff 被切成 ff 00 00）。只有用户主动取色才写。
-  S.ledColorRgb = null; S.ledColorSlot = null;
-  S.lightOps = S.lightOps.filter(o => o.row !== 'ltColorIdx');
+  // 每个模式保留独立颜色草稿；切换只加载目标模式颜色，不主动暂存写入。
   if (hw === 21) {
     S.lightPresetIdx = null;
-    if (!S.customInit) { initCustomCanvas(); S.customInit = true; }   // 工作帧=设备当前色
-  } else {
-    S.customInit = false;
-  }
+    if (!S.customInit && initCustomCanvas()) S.customInit = true;    // 工作帧=设备当前色
+  } else syncLightColorFromMode(hw);
   S.setDirty = S.setOps.length > 0 || S.lightOps.length > 0;
   updateDirtyUI();
   Leobog.log(`灯效：暂存切换到模式 ${hw}${hw === 21 ? '自定义色' : hw === 0 ? '已关闭' : ''}，点「应用修改」写入`, 'ok');
@@ -1678,7 +1839,7 @@ $('lightParams').addEventListener('click', e => {
     stageLightOps();
     if (e.target.classList.contains('on')) {
       // 开多彩：清单色暂存。色带本就是出厂彩虹（官方从不填色带），无需重推参数块
-      S.ledColorRgb = null;
+      S.ledColorPending.delete(S.lightSel);
       updateDirtyUI();
     } else {
       stageLightColor();
@@ -1743,6 +1904,19 @@ function renderMacro() {
 let macroRec = null;            // 录制 / 单键捕获状态
 
 function macroDraftGet() { return S.macroDraft; }
+function macroDraftDirty() {
+  const slot = S.macroEditSlot, draft = S.macroDraft;
+  if (slot == null || !draft) return false;
+  const original = S.macroSlots && S.macroSlots[slot];
+  const nameEl = $('meName');
+  const name = (nameEl ? nameEl.value : draft.name) || '';
+  if (!original) return draft.events.length > 0 || name !== ('宏' + (slot + 1));
+  if (name !== original.name || draft.events.length !== original.events.length) return true;
+  return draft.events.some((e, i) => {
+    const o = original.events[i];
+    return !o || e.flags !== o.flags || e.delay !== o.delay || e.key !== o.key;
+  });
+}
 
 function pushMacroEvent(ev) {
   const d = macroDraftGet();
@@ -1876,6 +2050,7 @@ function macroAddMouse(btn) {
 }
 
 async function saveMacroToKeyboard() {
+  if (applying) { Leobog.log('已有写入任务正在进行，请等待完成', 'warn'); return; }
   const slot = S.macroEditSlot;
   const d = macroDraftGet();
   if (slot == null || !d) return;
@@ -1889,7 +2064,7 @@ async function saveMacroToKeyboard() {
   const total = events.reduce((n, e) => n + (e.delay || 0), 0);
   if (!confirm(`保存到键盘？\n宏${slot + 1}「${name}」· ${events.length} 个动作 · 约 ${(total / 1000).toFixed(1)} 秒\n` +
       `会整片重写宏区，共 ${payload.length} 字节，写后读回校验。`)) return;
-  applying = true;
+  if (!beginApplying()) return;
   try {
     Leobog.log(`写入宏区… ${S.channel === 'wireless' ? '无线 0x03' : '有线 0x05'} · 载荷 ${payload.length} 字节`);
     const r = await Leobog.writeMacro(payload);
@@ -1906,7 +2081,7 @@ async function saveMacroToKeyboard() {
   } catch (e) {
     Leobog.log('宏写入失败：' + (e.message || e), 'bad');
   } finally {
-    applying = false;
+    endApplying();
   }
 }
 
@@ -1923,17 +2098,17 @@ const K104 = [
    ['NumLk', 0x53], ['Num/', 0x54], ['Num*', 0x55], ['Num-', 0x56]],
   [['Tab', 0x2b, 1.5], ['Q', 0x14], ['W', 0x1a], ['E', 0x08], ['R', 0x15], ['T', 0x17], ['Y', 0x1c],
    ['U', 0x18], ['I', 0x0c], ['O', 0x12], ['P', 0x13], ['[', 0x2f], [']', 0x30], ['\\', 0x31, 1.5],
-   0.25, ['Del', 0x4c], ['End', 0x4d], ['PgDn', 0x4e], 0.25,
+   0.25, [USAGE[0x4c], 0x4c], ['End', 0x4d], ['PgDn', 0x4e], 0.25,
    ['Num7', 0x5f], ['Num8', 0x60], ['Num9', 0x61], ['Num+', 0x57, 1, 2]],
   [['CapsLock', 0x39, 1.75], ['A', 0x04], ['S', 0x16], ['D', 0x07], ['F', 0x09], ['G', 0x0a],
    ['H', 0x0b], ['J', 0x0d], ['K', 0x0e], ['L', 0x0f], [';', 0x33], ["'", 0x34], ['Enter', 0x28, 2.25],
    0.25, ['左键', 'm1'], ['中键', 'm3'], ['右键', 'm2'], 0.25, ['Num4', 0x5c], ['Num5', 0x5d], ['Num6', 0x5e]],
   [['LShift', 0xe1, 2.25], ['Z', 0x1d], ['X', 0x1b], ['C', 0x06], ['V', 0x19], ['B', 0x05], ['N', 0x11],
    ['M', 0x10], [',', 0x36], ['.', 0x37], ['/', 0x38], ['RShift', 0xe5, 2.75],
-   0.25, ['前进', 'm5'], ['↑', 0x52], ['后退', 'm4'], 0.25, ['Num1', 0x59], ['Num2', 0x5a], ['Num3', 0x5b], ['NumEnter', 0x58, 1, 2]],
-  [['LCtrl', 0xe0, 1.25], ['LWin', 0xe3, 1.25], ['LAlt', 0xe2, 1.25], ['空格', 0x2c, 6.25],
+   0.25, ['前进', 'm5'], [USAGE[0x52], 0x52], ['后退', 'm4'], 0.25, ['Num1', 0x59], ['Num2', 0x5a], ['Num3', 0x5b], ['NumEnter', 0x58, 1, 2]],
+  [['LCtrl', 0xe0, 1.25], ['LWin', 0xe3, 1.25], ['LAlt', 0xe2, 1.25], [USAGE[0x2c], 0x2c, 6.25],
    ['RAlt', 0xe6, 1.25], ['RWin', 0xe7, 1.25], ['App', 0x65, 1.25], ['RCtrl', 0xe4, 1.25],
-   0.25, ['←', 0x50], ['↓', 0x51], ['→', 0x4f], 0.25, ['Num0', 0x62, 2], ['Num.', 0x63]],
+   0.25, [USAGE[0x50], 0x50], [USAGE[0x51], 0x51], [USAGE[0x4f], 0x4f], 0.25, ['Num0', 0x62, 2], ['Num.', 0x63]],
 ];
 let mpOpen = false;
 
@@ -2005,12 +2180,13 @@ window.addEventListener('resize', () => { if (mpOpen) mpRender(); });
 document.addEventListener('keydown', e => { if (mpOpen && e.key === 'Escape') mpShow(false); });
 
 async function deleteMacroSlot(i) {
+  if (applying) { Leobog.log('已有写入任务正在进行，请等待完成', 'warn'); return; }
   const slots = (S.macroSlots || parseMacroArea(S.macroRaw)).slice();
   if (!slots[i]) return;
   if (!confirm(`删除宏${i + 1}「${slots[i].name}」？其余宏会保留，但整片宏区要重写一次。`)) return;
   slots[i] = null;
   const payload = buildMacroArea(slots);
-  applying = true;
+  if (!beginApplying()) return;
   try {
     const r = await Leobog.writeMacro(payload);
     if (r.verified === true) {
@@ -2019,7 +2195,7 @@ async function deleteMacroSlot(i) {
       Leobog.log(`宏${i + 1} 已删除 ✅`, 'ok');
     } else Leobog.log('删除后校验未通过——可重试或点「重新读取」核对', 'warn');
   } catch (e) { Leobog.log('删除失败：' + e.message, 'bad'); }
-  finally { applying = false; }
+  finally { endApplying(); }
 }
 
 $('macro').addEventListener('click', e => {
@@ -2108,7 +2284,10 @@ function musicGain() {
 
 async function startMusic() {
   if (MUS.on) return;
+  if (!canWriteConfiguration()) return;
+  if (applying || Leobog.ioPending) { Leobog.log('配置读写进行中，暂不能启动音乐律动', 'warn'); return; }
   if (!S.channel) { Leobog.log('请先连接设备', 'warn'); return; }
+  const musicDevice = Leobog.state.dev;
   Leobog.log('音乐律动：请求系统音频…请选择「整个屏幕」并勾选「共享系统音频」，不要选单个标签页');
   try {
     // 只认系统音频回环：共享整个屏幕+系统音频后，切窗口/切页不断流
@@ -2116,6 +2295,11 @@ async function startMusic() {
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       video: true,
     });
+    if (applying || Leobog.ioPending || hasSelfTestRecovery() || Leobog.state.dev !== musicDevice) {
+      stream.getTracks().forEach(t => t.stop());
+      Leobog.log('音乐启动已取消：设备或配置写入状态已改变', 'warn');
+      return;
+    }
     stream.getVideoTracks().forEach(t => t.stop());
     if (!stream.getAudioTracks().length) {
       stream.getTracks().forEach(t => t.stop());
@@ -2132,6 +2316,12 @@ async function startMusic() {
     // data: 是唯一在 file:// 与 http:// 下都能用的形态（headless 实测 file:// 三选一仅 data OK）。
     const WL_SRC = 'class C extends AudioWorkletProcessor{process(){this.port.postMessage(1);return true}}registerProcessor("clock",C);';
     await ctx.audioWorklet.addModule('data:text/javascript;base64,' + btoa(WL_SRC));
+    if (applying || Leobog.ioPending || hasSelfTestRecovery() || Leobog.state.dev !== musicDevice) {
+      stream.getTracks().forEach(t => t.stop());
+      await ctx.close().catch(() => {});
+      Leobog.log('音乐启动已取消：设备或配置写入状态已改变', 'warn');
+      return;
+    }
     const node = new AudioWorkletNode(ctx, 'clock', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
     const mute = ctx.createGain(); mute.gain.value = 0;
     node.connect(mute); mute.connect(ctx.destination);   // 保持图存活
@@ -2230,6 +2420,7 @@ function encodeTlv(segs) {
 // 音频时钟驱动的发送节拍：worklet 消息只负责"叫醒"，所有时序用 performance.now()
 // （不受页面可见性节流）——发送路径零 setTimeout，后台与前台同速
 function musicTick() {
+  if (applying || hasSelfTestRecovery()) { if (MUS.on) stopMusic(); return; }
   MUS.analyser.getByteFrequencyData(MUS.freq);
   renderMusicBands(MUS.freq, MUS.buf, musicGain());
   const now = performance.now();
@@ -2284,7 +2475,7 @@ function stopMusic() {
   MUS.on = false; MUS.ctx = null; MUS.analyser = null; MUS.stream = null; MUS.proc = null;
   MUS.wlFrames = null; MUS.wlIdx = 0; MUS.inflight = false; MUS.armed = false;
   const a = $('musStart'), b = $('musStop');
-  if (a) a.disabled = !S.channel;
+  if (a) a.disabled = !S.channel || applying || hasSelfTestRecovery();
   if (b) b.disabled = true;
   flushPendingUnsol();                             // 音乐结束=空闲点：补跑忙时挂起的推送
 }
@@ -2385,14 +2576,13 @@ function renderKeymap(layer) {
     if (live) {
       const rec = decodeRecord(live, k.slot * 4);
       // 默认层：与出厂记录逐字节相同 = 没改过 → 不显示别称、不加高亮
-      // （否则 Space/↑/Del/FN 这类"键名与 usage 名不一致"的键会一直挂着别称）
+      // （否则历史别名或真实改绑会被误判）
       const cur4 = Array.from(live.subarray(k.slot * 4, k.slot * 4 + 4));
       const fac = layer === 0 ? factoryRecord(k.slot) : null;
       const untouched = !!fac && fac.length === 4 && fac.every((v, i) => v === cur4[i]);
-      if (rec.empty) { bind = '未绑定'; cls = 'empty'; }
-      else if (untouched) { bind = ''; }
-      else if (rec.plainMod || sameKey(rec.label, label)) { bind = ''; if (rec.type !== 0x00) cls = 'special'; }
-      else { bind = rec.label; if (rec.type !== 0x00) cls = 'special'; }
+      const display = keyBindingDisplay(rec, label, untouched);
+      bind = display.bind;
+      cls = display.cls;
     } else {
       if (layer === 0) bind = '';
       else if (layer === 1) {
@@ -2489,9 +2679,10 @@ window.addEventListener('resize', () => {
 
 // 日志折叠：点击整个标题栏（含最新预览）展开/收起；展开时显示「复制」并隐藏预览
 $('logHead').onclick = e => {
-  if (e.target.closest('#logCopy')) return;          // 复制按钮不触发折叠
+  if (e.target.closest('#logCopy,#selfTestBtn')) return; // 操作按钮不触发折叠
   const collapsed = $('log').classList.toggle('collapsed');
   $('logCopy').style.display = collapsed ? 'none' : '';
+  $('selfTestBtn').style.display = collapsed && !hasSelfTestRecovery() ? 'none' : '';
   $('logLast').style.display = collapsed ? '' : 'none';
 };
 $('logCopy').onclick = async () => {
@@ -2511,6 +2702,255 @@ $('logCopy').onclick = async () => {
     setTimeout(() => { $('logCopy').textContent = '复制'; }, 2500);
   }
 };
+
+// ── 完整设备自检：新鲜快照 → 同值写回 → 临时灯色写入 → 强制恢复 → 最终比对 ──
+function sameBytes(a, b, n, ignored = new Set()) {
+  if (!a || !b || a.length < n || b.length < n) return false;
+  for (let i = 0; i < n; i++) if (!ignored.has(i) && a[i] !== b[i]) return false;
+  return true;
+}
+function selfTestLedRestoreVerified(result, snapshot) {
+  if (!result || result.verified !== true || !snapshot) return false;
+  const bytes = result.verifiedBytes ?? (result.partial ? 0 : 512);
+  return bytes >= snapshot.ledVerifiedBytes;
+}
+function selfTestColorMatches(snapshot, block) {
+  return !!snapshot && sameBytes(snapshot.color, block, 378);
+}
+function selfTestLedMatches(snapshot, block) {
+  if (!snapshot || !block) return false;
+  const bytes = block.syntheticTail ? (block.verifiedBytes || 0) : block.length;
+  return bytes >= snapshot.ledVerifiedBytes && sameBytes(snapshot.led, block, snapshot.ledVerifiedBytes);
+}
+async function reloadSelfTestLighting(snapshot, target, report) {
+  if (!snapshot.reloadPending || snapshot.colorPending || snapshot.ledPending) return false;
+  if (!selfTestRecoveryMatchesDevice(snapshot)) {
+    report(false, '灯效运行态', '当前不是自检时的原设备，原始快照仍保留');
+    return false;
+  }
+  try {
+    // 官方生效顺序：LED 参数块 → 读设置 → 写设置。只验证 Flash 字节不够，
+    // 设置同值写回才会让固件从已恢复的色帧/LED 参数重新加载当前灯效。
+    const r = await Leobog.writeSettings(snapshot.settings.slice(), target);
+    if (!r || r.verified !== true) {
+      report(false, '灯效运行态', (r && r.error) || '设置块同值写回未通过可信校验');
+      return false;
+    }
+    let color = null, led = null, colorError = '', ledError = '';
+    try { color = await Leobog.readColor(); } catch (e) { colorError = e.message || String(e); }
+    try { led = await Leobog.readLed(); } catch (e) { ledError = e.message || String(e); }
+    const sameDevice = selfTestRecoveryMatchesDevice(snapshot);
+    const colorOk = sameDevice && selfTestColorMatches(snapshot, color);
+    const ledOk = sameDevice && selfTestLedMatches(snapshot, led);
+    if (!colorOk) snapshot.colorPending = true;
+    if (!ledOk) snapshot.ledPending = true;
+    if (colorOk && ledOk) snapshot.reloadPending = false;
+    report(colorOk && ledOk, '灯效运行态', colorOk && ledOk ? '设置块同值重载并复查原值一致'
+      : !sameDevice ? '重载期间设备已切换，不能确认原设备状态'
+      : [colorOk ? '' : `色帧复查失败${colorError ? `：${colorError}` : ''}`,
+          ledOk ? '' : `LED 复查失败${ledError ? `：${ledError}` : ''}`].filter(Boolean).join('；'));
+    return colorOk && ledOk;
+  } catch (e) {
+    report(false, '灯效运行态', e.message || String(e));
+    return false;
+  }
+}
+async function restoreSelfTestRecovery(report) {
+  const snapshot = selfTestRecovery;
+  if (!hasSelfTestRecovery()) return true;
+  const target = { expectedDeviceKey: snapshot.deviceKey };
+  const items = [
+    ['colorPending', '色帧', () => Leobog.writeColor(snapshot.color.slice(), target)],
+    ['ledPending', 'LED 参数块', () => Leobog.writeLed({ block: snapshot.led.slice(), ...target })],
+  ];
+  for (const [pending, name, write] of items) {
+    if (!snapshot[pending]) continue;
+    if (!selfTestRecoveryMatchesDevice(snapshot)) {
+      report(false, name, '当前不是自检时的原设备，原始快照仍保留');
+      continue;
+    }
+    try {
+      const r = await write();
+      const sameDevice = selfTestRecoveryMatchesDevice(snapshot);
+      const verified = sameDevice && (pending === 'ledPending'
+        ? selfTestLedRestoreVerified(r, snapshot) : !!r && r.verified === true);
+      if (verified) snapshot[pending] = false;
+      report(verified, name, verified ? '' : !sameDevice ? '恢复期间设备已切换，不能确认原设备恢复'
+        : r && r.verified === true && pending === 'ledPending'
+          ? `读回覆盖不足：${r.verifiedBytes || 0}B，需 ${snapshot.ledVerifiedBytes}B`
+          : (r && r.error) || '未通过可信读回校验');
+    } catch (e) { report(false, name, e.message || String(e)); }
+  }
+  if (!snapshot.colorPending && !snapshot.ledPending && snapshot.reloadPending)
+    await reloadSelfTestLighting(snapshot, target, report);
+  return !hasSelfTestRecovery();
+}
+async function retrySelfTestRecovery() {
+  if (applying || !hasSelfTestRecovery()) return;
+  if (!S.channel || !selfTestRecoveryMatchesDevice()) {
+    Leobog.log('请连接自检时的原设备再恢复；原始快照仍在本页，可先导出恢复备份', 'warn');
+    return;
+  }
+  const items = [selfTestRecovery.colorPending ? '色帧' : '', selfTestRecovery.ledPending ? 'LED 参数块' : '',
+    selfTestRecovery.reloadPending ? '灯效运行态' : ''].filter(Boolean);
+  const draftNote = hasPendingDrafts() ? '\n恢复后重新读取会丢弃当前未应用草稿。' : '';
+  if (!confirm(`恢复自检前的原始${items.join('、')}？\n仅写回尚未确认恢复的原值，不会重新运行自检。\n这是实际 Flash 写入，请勿断开设备。${draftNote}`)) return;
+  if (!beginApplying({ selfTestRecovery: true })) return;
+  stopMusic();
+  $('selfTestBtn').textContent = '恢复中…';
+  try {
+    await restoreSelfTestRecovery((ok, name, detail) =>
+      Leobog.log(`[自检恢复] ${ok ? '✅' : '❌'} ${name}${detail ? ' · ' + detail : ''}`, ok ? 'ok' : 'bad'));
+    if (!hasSelfTestRecovery()) {
+      selfTestRecovery = null;
+      try { await afterModel(); }
+      catch (e) { Leobog.log('[自检恢复] 原值已恢复，但重新读取失败：' + e.message, 'warn'); }
+      Leobog.log('[自检恢复] 原值已确认恢复，普通写入保护已解除', 'ok');
+    } else {
+      Leobog.log('[自检恢复] 仍有未确认恢复项：原始快照已保留，普通写入继续暂停；请勿刷新或关闭页面，可先导出恢复备份', 'warn');
+    }
+  } finally { endApplying(); }
+}
+async function runFullSelfTest() {
+  if (!S.channel || applying) return;
+  if (!canWriteConfiguration()) return;
+  if (hasPendingDrafts()) {
+    Leobog.log('自动测试已取消：存在未应用草稿，请先应用或放弃修改', 'warn');
+    return;
+  }
+  if (!confirm('运行完整功能测试？\n\n测试会执行真实 Flash 写入：\n' +
+      '· 设置块、键表页0、宏区同值写回并校验\n' +
+      '· 临时修改逐键色帧和 LED 参数块后立即恢复\n' +
+      '· 最后重新读取全部数据并与测试前快照比对\n\n' +
+      '测试期间请勿断开、休眠或操作键盘。建议先导出备份。继续？')) return;
+  if (!beginApplying()) return;
+  const btn = $('selfTestBtn');
+  const oldText = btn.textContent;
+  btn.textContent = '测试中…';
+  stopMusic();
+  const started = performance.now();
+  const target = { expectedDeviceKey: Leobog.devKey(Leobog.state.dev) };
+  let colorOriginal = null, ledOriginal = null;
+  let passed = 0, failed = 0;
+  let interrupted = false;
+  const check = (ok, name, detail = '') => {
+    if (ok) { passed++; Leobog.log(`[自检] ✅ ${name}${detail ? ' · ' + detail : ''}`, 'ok'); }
+    else { failed++; Leobog.log(`[自检] ❌ ${name}${detail ? ' · ' + detail : ''}`, 'bad'); }
+    return ok;
+  };
+  const must = (ok, name, detail = '') => {
+    if (!check(ok, name, detail)) throw new Error(name + (detail ? '：' + detail : ''));
+  };
+  try {
+    Leobog.log('[自检] 开始读取测试前完整快照…', 'warn');
+    const snap = {
+      psd: await Leobog.readPSD(),
+      settings: await Leobog.readSettings(),
+      color: await Leobog.readColor(),
+      led: await Leobog.readLed(),
+      macro: await Leobog.readMacro(),
+      keymap: [],
+    };
+    for (let p = 0; p < 4; p++) snap.keymap[p] = await Leobog.readKeymap(p);
+    const ledVerifiedBytes = snap.led.syntheticTail ? (snap.led.verifiedBytes || 490) : 512;
+    must(Array.isArray(snap.psd) && snap.psd.length === 6, 'PSD 读取', hexs(snap.psd));
+    must(snap.settings && snap.settings.length === 128, '设置块快照', '128B');
+    must(snap.color && snap.color.length === 378, '色帧快照', '378B');
+    must(snap.led && snap.led.length === 512 && snap.led[506] === 0x5a && snap.led[507] === 0xa5,
+      'LED 参数块快照', `${ledVerifiedBytes}B 可验证`);
+    must(snap.macro && snap.macro.length === 512, '宏区快照', '512B');
+    must(snap.keymap.every(k => k && k.length === 512), '四页键表快照', '4×512B');
+    if (S.channel === 'wireless') {
+      const telemetry = await Leobog.readTelemetry();
+      check(!!(telemetry && telemetry.length >= 1), '无线遥测读取', telemetry ? `${telemetry[0]}%` : '无回流');
+    }
+    selfTestRecovery = {
+      deviceKey: target.expectedDeviceKey, date: new Date().toISOString(),
+      modelName: S.modelName, psd: snap.psd.slice(), channel: S.channel,
+      settings: snap.settings.slice(), keymap: snap.keymap.map(k => k.slice()),
+      color: snap.color.slice(), led: snap.led.slice(), ledVerifiedBytes,
+      colorPending: false, ledPending: false, reloadPending: false,
+    };
+    colorOriginal = selfTestRecovery.color;
+    ledOriginal = selfTestRecovery.led;
+    if (!selfTestRecoveryMatchesDevice()) throw new Error('读取快照期间设备已切换，已停止自检写入');
+
+    Leobog.log('[自检] 写回键表页0原值…');
+    let r = await Leobog.writeKeymap(0, snap.keymap[0].slice(), target);
+    must(r.verified === true, '键表页0同值写回');
+
+    Leobog.log('[自检] 写回宏区原值…');
+    const macroPayload = snap.macro.slice(0, 504);       // 原样写回，避免等价重打包改变目录布局
+    r = await Leobog.writeMacro(macroPayload, target);
+    must(r.verified === true, '宏区同值写回');
+
+    Leobog.log('[自检] 临时修改色帧 1 个通道…');
+    const colorTemp = colorOriginal.slice();
+    colorTemp[0] ^= 0x01;
+    selfTestRecovery.colorPending = true;             // 必须在可能落库的 await 之前保留原值。
+    selfTestRecovery.reloadPending = true;            // 恢复字节后还须按官方顺序触发运行态重载。
+    r = await Leobog.writeColor(colorTemp, target);
+    must(r.verified === true, '临时色帧写入', `读回尝试 ${r.verifyAttempts || 1} 次`);
+    r = await Leobog.writeColor(colorOriginal.slice(), target);
+    must(r.verified === true, '色帧恢复');
+    // 暂不清除恢复标记：最终重新读取也必须确认原值，不能由中途 ACK/读回解锁。
+
+    Leobog.log('[自检] 临时修改 LED 参数块 1 字节…');
+    const ledTemp = ledOriginal.slice();
+    ledTemp[21] ^= 0x01;
+    selfTestRecovery.ledPending = true;
+    r = await Leobog.writeLed({ block: ledTemp, ...target });
+    must(selfTestLedRestoreVerified(r, selfTestRecovery), '临时 LED 参数块写入', `${r.verifiedBytes || 512}B 可验证`);
+    r = await Leobog.writeLed({ block: ledOriginal.slice(), ...target });
+    must(selfTestLedRestoreVerified(r, selfTestRecovery), 'LED 参数块恢复', `${r.verifiedBytes || 512}B 可验证`);
+
+    Leobog.log('[自检] 写回设置块原值并重载灯效运行态…');
+    r = await Leobog.writeSettings(snap.settings.slice(), target);
+    must(r.verified === true, '设置块同值写回');
+
+    Leobog.log('[自检] 最终重新读取并逐块比对…');
+    const finalSettings = await Leobog.readSettings();
+    const finalColor = await Leobog.readColor();
+    const finalLed = await Leobog.readLed();
+    const finalMacro = await Leobog.readMacro();
+    const sameDevice = selfTestRecoveryMatchesDevice();
+    const settingsOk = sameDevice && sameBytes(snap.settings, finalSettings, 128, new Set([14]));
+    const colorOk = sameDevice && selfTestColorMatches(selfTestRecovery, finalColor);
+    const ledOk = sameDevice && selfTestLedMatches(selfTestRecovery, finalLed);
+    selfTestRecovery.colorPending = !colorOk;
+    selfTestRecovery.ledPending = !ledOk;
+    selfTestRecovery.reloadPending = !(settingsOk && colorOk && ledOk);
+    must(settingsOk, '设置块最终一致（忽略设备自管字节14）');
+    must(colorOk, '色帧最终一致');
+    must(ledOk, 'LED 参数块最终一致', `${ledVerifiedBytes}B`);
+    must(JSON.stringify(Leobog.parseMacroArea(snap.macro)) === JSON.stringify(Leobog.parseMacroArea(finalMacro)), '宏区最终一致');
+    for (let p = 0; p < 4; p++) {
+      const finalKeymap = await Leobog.readKeymap(p);
+      must(sameBytes(snap.keymap[p], finalKeymap, 504), `键表页${p}最终一致`);
+    }
+  } catch (e) {
+    interrupted = true;
+    Leobog.log('[自检] 测试中断：' + (e.message || e), 'bad');
+  } finally {
+    if (hasSelfTestRecovery())
+      await restoreSelfTestRecovery((ok, name, detail) => check(ok, '异常恢复：' + name, detail));
+    if (!hasSelfTestRecovery()) {
+      selfTestRecovery = null;
+      try { await afterModel(); }
+      catch (e) { Leobog.log('[自检] 测试后重新读取失败：' + e.message, 'warn'); }
+    } else {
+      Leobog.log('[自检] 原始恢复快照已保留，未将临时数据刷新为已完成状态；普通写入继续暂停', 'warn');
+    }
+    const ms = Math.round(performance.now() - started);
+    Leobog.log(`[自检] 完成：${passed} 通过 / ${failed} 失败${interrupted ? ' · 流程中断' : ''} · ${(ms / 1000).toFixed(1)}s` +
+      (hasSelfTestRecovery() ? ' · ⚠️ 存在未确认恢复项，请点击「恢复自检原值」；勿刷新或关闭页面，可先导出恢复备份' : ''),
+      interrupted || failed || hasSelfTestRecovery() ? 'warn' : 'ok');
+    btn.textContent = oldText;
+    endApplying();
+  }
+}
+$('selfTestBtn').onclick = () => (hasSelfTestRecovery() ? retrySelfTestRecovery() : runFullSelfTest())
+  .catch(e => Leobog.log('[自检] 未处理异常：' + e.message, 'bad'));
 
 // ── 明暗主题（始终跟随浏览器 / 系统）──
 {
@@ -2699,14 +3139,8 @@ function openEditor(slot, name) {
   $('edKey').textContent = name;
   $('edSlot').textContent = slot;
   $('edCur').textContent = hexs(rec);
-  let type = 'normal';
-  // 空记录与「0x07 但无修饰位」都按普通键展示（调色板常驻可用）
-  if (rec[0] === 0x03) type = 'macro';
-  else if (rec[0] === 0x07 && rec[1]) type = 'combo';
-  // 特殊键：厂商功能码(07+mod0) / 层切换(0d) / 鼠标(01) / 媒体(02)
-  else if (rec[0] === 0x01 || rec[0] === 0x02 || rec[0] === 0x0d || (rec[0] === 0x07 && !rec[1]) ||
-           (rec[0] === 0x00 && rec[2] !== 0 && rec[3] === 0))   // 驱动的 PC 命令（键码在 [2]）也算特殊键
-    type = 'special';
+  // 空记录按普通键展示；其余类型由同一纯函数识别，便于回归测试。
+  const type = editorTypeForRecord(rec);
 
   $('edType').value = type;
   if (type === 'macro') {
@@ -3196,7 +3630,7 @@ function fwFlowEngine(st, p) {
 function fwStarSpawn(st, p) {
   const T = window.FW_TABLES;
   for (let i = 0; i < 5; i++) {
-    const idx = (Math.random() * 126) | 0;
+    const idx = (Math.random() * 0x84) | 0;          // 固件 A8CB % 0x84（0..131）
     const rr = (idx / 21) | 0, cc = idx % 21;
     const col = T.ramp_36CE[rr][cc], row = T.ramp_374C[rr][cc];
     if (col >= 15 || row > 5) continue;
@@ -3683,80 +4117,136 @@ syncEditorRows();
 
 // ── 脏状态 / 应用按钮 ────────────────────────────────────────
 function updateDirtyUI() {
+  const recoveryPending = hasSelfTestRecovery();
   const parts = [];
   const n = S.kmDirty.filter(Boolean).length;
   if (n) parts.push(`键表页×${n}`);
   if (S.setOps.length) parts.push('设置：' + S.setOps.map(o => o.key).join('、'));
   if (S.lightOps.length) parts.push('灯效：' + S.lightOps.map(o => o.key).join('、'));
   if (S.colorDirty) parts.push('灯色');
-  if (S.ledColorRgb) parts.push('单色LED');
+  if (S.ledColorPending.size) parts.push(`单色LED×${S.ledColorPending.size}`);
+  if (S.ledRestoreBlock) parts.push('备份灯效参数块');
+  if (S.ledPush) parts.push('灯效参数块');
   const any = parts.length > 0 && !!S.channel;
-  $('applyBtn').disabled = !any;
+  $('applyBtn').disabled = !any || applying || recoveryPending;
   $('applyBtn').textContent = '应用修改';           // 按钮文案固定，待写入内容交给右侧提示
   const hint = $('applyHint');
   if (hint) {
-    const txt = any ? '待写入：' + parts.join(' · ') : '';
-    hint.hidden = !any;
+    const txt = recoveryPending
+      ? '自检原值待恢复 · 普通写入已暂停，请点击「恢复自检原值」或导出恢复备份'
+      : any ? '待写入：' + parts.join(' · ') : '';
+    hint.hidden = !any && !recoveryPending;
     hint.textContent = txt;
     hint.title = txt;
+    hint.classList.toggle('warn', recoveryPending);
   }
-  $('backupBtn').disabled = !S.channel;
-  $('restoreBtn').disabled = !S.channel;
-  $('factoryBtn').disabled = !S.channel;
+  $('backupBtn').disabled = (!S.channel && !recoveryPending) || applying;
+  $('restoreBtn').disabled = !S.channel || applying || recoveryPending;
+  $('factoryBtn').disabled = !S.channel || applying || recoveryPending;
+  $('selfTestBtn').disabled = !S.channel || applying || (recoveryPending && !selfTestRecoveryMatchesDevice());
+  if (!applying) $('selfTestBtn').textContent = recoveryPending ? '恢复自检原值' : '自动测试';
+  $('selfTestBtn').title = recoveryPending
+    ? `恢复 ${selfTestRecovery.modelName} 自检前的原值；必须连接自检时的原设备。快照仅保留在本页，离开前请导出恢复备份`
+    : '完整读写测试：临时修改 LED/色帧并自动恢复';
+  $('selfTestBtn').style.display = recoveryPending || !$('log').classList.contains('collapsed') ? '' : 'none';
+  const recoveryExport = $('recoveryExportBtn');
+  if (recoveryExport) {
+    recoveryExport.style.display = recoveryPending ? '' : 'none';
+    recoveryExport.disabled = applying;
+  }
+  $('refreshBtn').disabled = !S.channel || applying;
+  $('connectBtn').disabled = applying;
   if ($('capStop').style.display === 'none') $('capStart').disabled = !S.channel;   // 录制中不碰开始按钮
   const mus = $('musStart');
-  if (mus) mus.disabled = !S.channel || MUS.on;
+  if (mus) mus.disabled = !S.channel || MUS.on || applying || recoveryPending;
   if ($('ltNotes')) renderLightNotes();
 }
 
 // ── 备份 / 恢复（JSON，手动导出 / 写回）──────────────────
 function backupData() {
+  const snapshot = hasSelfTestRecovery() ? selfTestRecovery : null;
+  const baseSettings = snapshot ? snapshot.settings : S.settings;
+  const settings = baseSettings ? baseSettings.slice() : null;
+  if (settings && !snapshot) for (const op of [...S.setOps, ...S.lightOps]) op.fn(settings);
+  let led = snapshot ? snapshot.led.slice()
+    : S.ledRestoreBlock ? S.ledRestoreBlock.slice() : (S.ledBlock ? S.ledBlock.slice() : null);
+  if (led && !snapshot) for (const [mode, rgb] of S.ledColorPending) {
+    const off = ledColorOffset(mode); led.set(rgb, off);
+  }
   return {
-    format: 'leobog-hi8-backup', version: 1,
-    date: new Date().toISOString(),
-    model: S.modelName, psd: S.psd, channel: S.channel,
-    settings: S.settings ? toHex(S.settings) : null,
-    keymap: S.keymap.map(k => k ? toHex(k) : null),
-    color: S.color ? toHex(S.color) : null,
+    format: 'leobog-hi8-backup', version: 2,
+    date: snapshot ? snapshot.date : new Date().toISOString(),
+    model: snapshot ? snapshot.modelName : S.modelName,
+    psd: snapshot ? snapshot.psd : S.psd, channel: snapshot ? snapshot.channel : S.channel,
+    settings: settings ? toHex(settings) : null,
+    keymap: (snapshot ? snapshot.keymap : S.keymap).map(k => k ? toHex(k) : null),
+    color: snapshot ? toHex(snapshot.color) : S.color ? toHex(S.color) : null,
+    led: led ? toHex(led) : null,
   };
 }
 
 function downloadBackup() {
-  const blob = new Blob([JSON.stringify(backupData(), null, 1)], { type: 'application/json' });
+  const data = backupData();
+  if (!data.led) Leobog.log('灯效参数块没有可信读回，本次备份不含逐模式精细单色', 'warn');
+  const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  a.download = `hi8-backup-${S.modelName || 'dev'}-${ts}.json`;
+  a.download = `${hasSelfTestRecovery() ? 'hi8-self-test-recovery' : 'hi8-backup'}-${data.model || 'dev'}-${ts}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   Leobog.log(`已导出备份：${a.download}`, 'ok');
+  if (hasSelfTestRecovery()) Leobog.log('恢复备份包含自检前原值；请仅在自检时的原设备上恢复', 'warn');
 }
 
 $('backupBtn').onclick = () => downloadBackup();
-$('restoreBtn').onclick = () => $('restoreFile').click();
+$('recoveryExportBtn').onclick = () => downloadBackup();
+$('restoreBtn').onclick = () => {
+  if (!applying && canWriteConfiguration()) $('restoreFile').click();
+};
 $('restoreFile').onchange = async e => {
   const f = e.target.files[0];
   e.target.value = '';
-  if (!f) return;
+  if (!f || applying || !canWriteConfiguration()) return;
   let o;
   try { o = JSON.parse(await f.text()); }
   catch (err) { Leobog.log('备份文件解析失败：' + err.message, 'bad'); return; }
   if (o.format !== 'leobog-hi8-backup') { Leobog.log('不是本页导出的备份文件', 'bad'); return; }
   const parse = (h, n, what) => {
     if (!h) return null;
+    if (typeof h !== 'string' || h.length !== n * 2 || !/^[0-9a-fA-F]+$/.test(h))
+      throw new Error(`${what} 必须是 ${n * 2} 位十六进制字符串`);
     const a = fromHex(h);
     if (a.length !== n) throw new Error(`${what} 长度 ${a.length} ≠ ${n}`);
     return a;
   };
-  let km = [null, null, null, null], st = null, col = null;
+  let km = [null, null, null, null], st = null, col = null, led = null;
   try {
     st = parse(o.settings, 128, '设置块');
     col = parse(o.color, 378, '色帧');
+    led = parse(o.led, 512, '灯效参数块');
+    if (led && (led[506] !== 0x5a || led[507] !== 0xa5 || !led.some(v => v !== 0)))
+      throw new Error('灯效参数块缺少 5A A5 魔数或内容全零');
     for (let i = 0; i < 4; i++) km[i] = o.keymap && o.keymap[i] ? parse(o.keymap[i], 512, `键表页${i}`) : null;
   } catch (err) { Leobog.log('备份内容校验失败：' + err.message, 'bad'); return; }
-  const items = [st ? '设置' : null, ...km.map((k, i) => k ? `键表页${i}` : null), col ? '色帧' : null].filter(Boolean);
+  const items = [st ? '设置' : null, ...km.map((k, i) => k ? `键表页${i}` : null),
+    col ? '色帧' : null, led ? '灯效参数块' : null].filter(Boolean);
   if (!items.length) { Leobog.log('备份里没有可恢复的数据', 'warn'); return; }
   if (!confirm(`恢复 ${o.date} 的备份？型号 ${o.model || '未知'}。\n将写入：${items.join('、')}。\n恢复后立即应用，并读回校验。`)) return;
+  if (!beginApplying()) return;
+  try {
+    await afterModel();                              // 先取设备新鲜基线，备份缺失块不沿用旧草稿缓冲
+  } catch (err) {
+    Leobog.log('恢复备份前读取设备基线失败，已中止：' + err.message, 'bad');
+    endApplying();
+    return;
+  }
+  endApplying(false);
+  // 恢复只写备份明确包含的块；先清掉旧草稿，避免确认框外的内容被顺带写入。
+  S.kmDirty = [false, false, false, false];
+  S.setOps = []; S.lightOps = []; S.setDirty = false;
+  S.colorDirty = false; S.ledPush = false; S.ledRestoreBlock = null; S.ledColorPending.clear();
+  S.customInit = false;
   for (let i = 0; i < 4; i++) if (km[i]) { S.keymap[i] = km[i]; S.kmDirty[i] = true; }
   if (st) {
     S.settings = st;
@@ -3765,15 +4255,18 @@ $('restoreFile').onchange = async e => {
     S.lightOps = []; S.lightSel = st[10];
     S.setDirty = true;
   }
-  if (col) { S.color = col; S.colorBase = col.slice(); S.colorDirty = true; }
+  if (col) { S.color = col; S.colorBase = col.slice(); S.colorLoaded = true; S.colorDirty = true; }
+  if (led) { S.ledRestoreBlock = led; S.ledBlock = led.slice(); }
+  if (led) syncLightColorFromMode(S.lightSel != null ? S.lightSel : (S.settings ? S.settings[10] : null));
   if (st) { renderSettings(); renderLight(); }
   renderKeymap(S.curLayer);
   updateDirtyUI();
-  await applyAll();
+  await applyAll({ skipConfirm: true });
 };
 
 // ── 恢复出厂（固件镜像：设置块 @C400 + Win 键表四页，data/factory.js）────
 $('factoryBtn').onclick = async () => {
+  if (applying || !canWriteConfiguration()) return;
   const mod = window.LEOBOG_MODELS && window.LEOBOG_MODELS[S.modelName];
   const fac = mod && mod.factory;
   if (!fac) { Leobog.log('无出厂数据（型号未加载或该型号无 factory）', 'bad'); return; }
@@ -3781,6 +4274,8 @@ $('factoryBtn').onclick = async () => {
       '· 色帧清零并重推灯效参数块，官方同款，灯光即刻恢复\n· 设置块 → 固件 @0xC400\n\n' +
       '个人键位/灯色修改将丢失。建议先「导出备份」。继续？')) return;
   try {
+    S.ledColorPending.clear(); S.ledRestoreBlock = null; S.ledBlock = null;
+    S.lightOps = []; S.setOps = []; S.ledPush = false;
     S.keymap = fac.keymapWin.map(h => fromHex(h));
     S.kmDirty = [true, true, true, true];
     S.settings = fromHex(fac.settings);
@@ -3789,64 +4284,86 @@ $('factoryBtn').onclick = async () => {
     S.setDirty = true;
     S.color = new Uint8Array(378);
     S.colorBase = new Uint8Array(378);
+    S.colorLoaded = true;
     S.colorDirty = true;
     S.ledPush = true;                               // 官方恢复出厂必推灯效参数块（灯光恢复关键）
     renderSettings(); renderLight(); renderKeymap(S.curLayer);
     updateDirtyUI();
     Leobog.log('固件出厂值已暂存（键表×4 + 色帧清零 + 灯效参数块 + 设置块），点「应用修改」写入', 'ok');
-    await applyAll();
+    await applyAll({ skipConfirm: true });
   } catch (e) {
     Leobog.log('恢复出厂构建失败：' + (e.message || e), 'bad');
   }
 };
 
 // ── 应用管线：备份 → 键表页 → 设置（新鲜读-改-写）→ 色帧，逐项读回校验 ──
-async function applyAll() {
+async function applyAll(opts = {}) {
+  if (applying) { Leobog.log('已有应用任务正在进行，请等待完成', 'warn'); return; }
+  if (!canWriteConfiguration()) return;
   const kmPages = [0, 1, 2, 3].filter(p => S.kmDirty[p]);
   const setOps = [...S.setOps, ...S.lightOps];
   const doCol = S.colorDirty && S.color;
-  const doLedRgb = !!(S.ledColorRgb && S.channel);     // 单色：注入参数块并推送
-  const ledRgb = doLedRgb ? S.ledColorRgb.slice() : null;   // 快照（写后 S.ledColorRgb 会被清空）
-  const ledMode = S.ledColorSlot || S.lightSel || 1;       // 颜色槽按模式定位：21+(mode-1)*21
-  const ledOff = 21 + (Math.min(Math.max(ledMode, 1), 19) - 1) * 21;
-  // 官方 ApplySetting 每次改色都连写设置块 → 这里同样补一次（固件按设置块事件重载灯效）
-  const forceSet = !!doLedRgb;
+  const colorExpected = doCol ? S.color.slice() : null;
+  const doFactoryLed = S.ledPush;
+  const ledRestore = (!doFactoryLed && S.ledRestoreBlock) ? S.ledRestoreBlock.slice() : null;
+  const ledEntries = (!doFactoryLed && !ledRestore && S.channel)
+    ? [...S.ledColorPending.entries()].map(([mode, rgb]) => [mode, rgb.slice()]).sort((a, b) => a[0] - b[0])
+    : [];
+  const doLedRgb = ledEntries.length > 0;
+  // 官方 ApplySetting 的灯效生效顺序是：色帧/LED 参数 → 设置块。任何灯光数据写入都必须
+  // 以设置事件收尾，否则 Flash 虽一致，当前灯效运行态仍可能熄灭到下次断电重载。
+  const forceSet = !!(doCol || doFactoryLed || ledRestore || doLedRgb);
   const doSet = (setOps.length > 0 || forceSet) && S.settings;
-  if (!kmPages.length && !doSet && !doCol && !S.ledPush && !doLedRgb) {
+  if (forceSet && !S.settings) {
+    Leobog.log('灯效写入已取消：没有可信设置块，无法按官方顺序重载灯效运行态；请先重新读取', 'warn');
+    return;
+  }
+  if (!kmPages.length && !doSet && !doCol && !doFactoryLed && !ledRestore && !doLedRgb) {
     Leobog.log('没有待应用的修改'); return;
   }
   const parts = [];
   if (kmPages.length) parts.push('键表页 ' + kmPages.join('/'));
   if (doCol) parts.push('色帧');
-  if (doLedRgb) parts.push(`灯效参数块 · 模式${ledMode}色槽 ${ledOff}–${ledOff + 2}`);
-  else if (S.ledPush) parts.push('灯效参数块');
+  if (ledRestore) parts.push('备份灯效参数块');
+  if (doLedRgb) parts.push('灯效参数块 · 模式 ' + ledEntries.map(([mode]) => mode).join('/'));
+  else if (doFactoryLed) parts.push('灯效参数块');
   if (doSet) parts.push('设置：' + (setOps.length ? setOps.map(o => o.key).join('、') : '同值写回'));
   const wlNote = S.channel === 'wireless' ? '\n无线通道写入和读回校验较慢，每页要几秒，请勿断开设备。' : '';
-  if (!confirm(`将写入：${parts.join('、')}。写后自动读回逐字节校验。${wlNote}\n继续？`)) return;
-  const btn = $('applyBtn');
-  btn.disabled = true;
-  applying = true;
+  if (!opts.skipConfirm && !confirm(`将写入：${parts.join('、')}。写后自动读回逐字节校验。${wlNote}\n继续？`)) return;
+  if (MUS.on) { stopMusic(); Leobog.log('应用配置前已停止音乐律动，避免 HID 通道并发', 'warn'); }
+  if (!beginApplying()) return;
   const pace = ms => new Promise(r => setTimeout(r, ms));   // 块间喘息：固件 flash 提交期不被打断
+  let pipelineOk = true;
+  let factoryLedExpected = null;
+  let lightingWriteAttempted = false, lightingReloadVerified = false;
+  const markLightingWrite = () => {
+    // 即使后续 ACK/读回失败，写入也可能已落库并改变运行态；必须保守地补设置事件。
+    lightingWriteAttempted = true;
+    lightingReloadVerified = false;
+  };
   try {
     for (const p of kmPages) {
       Leobog.log(`写入键表页${p}（${S.channel === 'wireless' ? '无线 0x01/0x25' : '有线 0x03'}）…`);
       let r;
       try { r = await Leobog.writeKeymap(p, S.keymap[p]); }
-      catch (err) { Leobog.log(`键表页${p} 写入失败：${err.message}`, 'bad'); break; }
+      catch (err) { Leobog.log(`键表页${p} 写入失败：${err.message}`, 'bad'); pipelineOk = false; break; }
       if (r.verified === true) {
         S.keymap[p] = r.readback;
         S.kmDirty[p] = false;
         Leobog.log(`键表页${p} ✅ 写入并读回一致`, 'ok');
       } else if (r.readback) {
+        pipelineOk = false;
         Leobog.log(`键表页${p} ❌ 读回有 ${r.diffCount} 处不一致（@${r.idxs.slice(0, 8).join(',')}），保留未应用状态`, 'bad');
       } else {
+        pipelineOk = false;
         Leobog.log(`键表页${p} ⚠️ 已发送写入但读回失败（${r.error || '未知'}），校验未完成，保留未应用`, 'warn');
       }
       renderKeymap(S.curLayer);
+      if (!pipelineOk) break;
       await pace(120);
     }
     // 官方无线恢复出厂顺序（hid_wl_factory.log 实测）：键表×N → 色帧 → 灯效参数块 → 设置
-    if (doCol) {
+    if (pipelineOk && doCol) {
       await pace(120);
       const fd = S.lightSel === 21 ? ' · 自定义逐键色' : '';
       Leobog.log(`写入色帧（${S.channel === 'wireless' ? '无线 0x02/0x1b' : '有线 0x06'}）${fd}…`);
@@ -3862,44 +4379,99 @@ async function applyAll() {
         Leobog.log(`[色帧] 点亮 ${lit.length} 键：${desc}${lit.length > 16 ? ' …' : ''}（平面写入）`);
       }
       try {
+        markLightingWrite();
         const r = await Leobog.writeColor(S.color);
         if (r.verified === true) {
           S.color = r.readback;
           S.colorBase = r.readback.slice();        // 应用成功 → 成为新底稿
           if (S.lightSel === 21) paintCustomKeys();
-          S.colorDirty = false;
+          if (!doSet) S.colorDirty = false;        // 有设置收尾时，须等最终运行态复查后再清。
           Leobog.log('色帧 ✅ 写入并读回一致', 'ok');
         } else if (r.readback) {
+          pipelineOk = false;
           Leobog.log(`色帧 ❌ 读回有 ${r.diffCount} 处不一致`, 'bad');
         } else {
+          pipelineOk = false;
           Leobog.log(`色帧 ⚠️ 已发送写入但读回失败（${r.error || '未知'}）`, 'warn');
         }
       } catch (err) {
+        pipelineOk = false;
         Leobog.log('色帧写入失败：' + err.message, 'bad');
       }
     }
-    if (S.ledPush || doLedRgb) {
-      // 恢复出厂=纯常量；单色=注入 RGB 到 payload[21..23]（有线/无线抓包一致实证）
+    if (pipelineOk && doFactoryLed) {
       await pace(120);
-      const rgbNote = doLedRgb ? `，单色 RGB(${S.ledColorRgb.join(',')})` : '，官方恢复出厂同款常量';
-      Leobog.log(`写入灯效参数块（${S.channel === 'wireless' ? '无线 0x09/0x25' : '有线 0x0a'}${rgbNote}）…`);
+      Leobog.log(`写入灯效参数块（${S.channel === 'wireless' ? '无线 0x09/0x25' : '有线 0x0a'}，官方恢复出厂常量）…`);
       try {
-        const r = await Leobog.writeLed(doLedRgb ? { rgb: ledRgb, mode: ledMode } : {});
-        S.ledPush = false;
-        if (doLedRgb) { S.ledColorRgb = null; S.ledColorSlot = null; }
-        if (r.verified === false && r.readback) {
-          const got = Array.from(r.readback.slice(21, 24));
-          Leobog.log(`灯效参数块 ⚠️ 读回RGB(${got.join(',')}) ≠ 写入RGB(${ledRgb.join(',')})——设备没存下颜色`, 'bad');
-        } else if (r.verified === false) {
-          Leobog.log('灯效参数块 ⚠️ 已推送，但读回失败（' + (r.error || '未知') + '）', 'warn');
+        markLightingWrite();
+        const r = await Leobog.writeLed({});
+        if (r.verified === true) {
+          S.ledPush = false;
+          if (r.readback) {
+            S.ledBlock = r.readback.slice(0, 512);
+            factoryLedExpected = r.readback.slice(0, 512);
+          }
+          Leobog.log(r.partial
+            ? `灯效参数块 ✅ 可读区前${r.verifiedBytes}B一致；无线固定尾部为合成值`
+            : '灯效参数块 ✅ 已推送并完整读回一致', 'ok');
         } else {
-          Leobog.log('灯效参数块 ✅ 已推送并读回一致', 'ok');
+          pipelineOk = false;
+          Leobog.log('灯效参数块 ⚠️ 已推送但未完成可信校验，保留待重试状态', 'warn');
         }
       } catch (err) {
+        pipelineOk = false;
         Leobog.log('灯效参数块写入失败：' + err.message, 'bad');
       }
     }
-    if (doSet) {
+    if (pipelineOk && ledRestore) {
+      await pace(120);
+      Leobog.log('写入备份中的完整灯效参数块…');
+      try {
+        markLightingWrite();
+        const r = await Leobog.writeLed({ block: ledRestore });
+        if (r.verified === true) {
+          if (!doSet) S.ledRestoreBlock = null;
+          if (r.readback) S.ledBlock = r.readback.slice(0, 512);
+          Leobog.log(r.partial
+            ? `备份灯效参数块 ✅ 可读区前${r.verifiedBytes}B一致`
+            : '备份灯效参数块 ✅ 完整读回一致', 'ok');
+        } else {
+          pipelineOk = false;
+          Leobog.log('备份灯效参数块未通过可信校验，保留待重试状态', 'warn');
+        }
+      } catch (err) {
+        pipelineOk = false;
+        Leobog.log('备份灯效参数块写入失败：' + err.message, 'bad');
+      }
+    }
+    if (pipelineOk && doLedRgb) {
+      for (const [mode, rgb] of ledEntries) {
+        await pace(120);
+        const off = ledColorOffset(mode);
+        Leobog.log(`写入模式${mode}单色 RGB(${rgb.join(',')}) → 参数块[${off}..${off + 2}]…`);
+        try {
+          markLightingWrite();
+          const r = await Leobog.writeLed({ rgb, mode });
+          if (r.verified === true) {
+            if (!doSet) S.ledColorPending.delete(mode);
+            if (r.readback) S.ledBlock = r.readback.slice(0, 512);
+            Leobog.log(r.partial
+              ? `模式${mode}单色 ✅ 可读区前${r.verifiedBytes}B一致`
+              : `模式${mode}单色 ✅ 完整读回一致`, 'ok');
+          } else {
+            pipelineOk = false;
+            const got = r.readback ? Array.from(r.readback.slice(off, off + 3)) : null;
+            Leobog.log(`模式${mode}单色 ⚠️ 未通过校验${got ? `，读回 RGB(${got.join(',')})` : ''}，保留待重试`, 'warn');
+            break;
+          }
+        } catch (err) {
+          pipelineOk = false;
+          Leobog.log(`模式${mode}单色写入失败：${err.message}`, 'bad');
+          break;
+        }
+      }
+    }
+    if (pipelineOk && doSet) {
       await pace(120);
       Leobog.log('设置块修改：' + (setOps.length ? setOps.map(o => o.key).join(' + ') : '同值写回（效果模式色帧刷新）'));
       Leobog.log('读-改-写设置块（新鲜读取 → 套用修改 → 整块写回）…');
@@ -3907,6 +4479,8 @@ async function applyAll() {
         const fresh = await Leobog.readSettings();
         for (const op of setOps) op.fn(fresh);
         const r = await Leobog.writeSettings(fresh);
+        const settingsVerified = r.verified === true;
+        lightingReloadVerified = settingsVerified;
         if (r.verified === true) {
           S.settings = r.readback;
           S.setOps = []; S.lightOps = []; S.setDirty = false;
@@ -3921,27 +4495,143 @@ async function applyAll() {
         }
         renderSettings();
         renderLight();
-        // 设置块写后复查：看参数块对应槽位是否还是我们写的颜色，不一致就补推一次
-        if (doLedRgb && ledRgb) {
+        const hasLedExpected = doLedRgb || !!ledRestore || !!factoryLedExpected;
+        const ledMatches = back => {
+          if (!back) return false;
+          if (doLedRgb) return ledEntries.every(([mode, rgb]) => {
+            const off = ledColorOffset(mode);
+            return back[off] === rgb[0] && back[off + 1] === rgb[1] && back[off + 2] === rgb[2];
+          });
+          const expected = ledRestore || factoryLedExpected;
+          if (!expected) return true;
+          const limit = back.syntheticTail ? Math.min(back.verifiedBytes || 0, 512) : Math.min(back.length, 512);
+          if (!limit) return false;
+          for (let i = 0; i < limit; i++) if (back[i] !== expected[i]) return false;
+          return true;
+        };
+        let colorPostcheckOk = true, ledPostcheckOk = true, repairedAfterSettings = false;
+        // 设置事件可能重载/回滚灯光块；先补推原目标，再补一次设置事件，不能以 LED 写结尾。
+        if (colorExpected) {
           try {
-            const lo = ledOff;
-            const back = await Leobog.readLed();
-            const cur = Array.from(back.slice(lo, lo + 3));
-            if (cur[0] !== ledRgb[0] || cur[1] !== ledRgb[1] || cur[2] !== ledRgb[2]) {
-              Leobog.log(`[LED] 设置块写入后参数块被回滚为 RGB(${cur.join(',')})，补推单色…`, 'warn');
-              await Leobog.writeLed({ rgb: ledRgb, mode: ledMode });
+            let back = await Leobog.readColor();
+            if (!sameBytes(colorExpected, back, 378)) {
+              Leobog.log('[色帧] 设置块写入后被回滚，补推目标色帧…', 'warn');
+              markLightingWrite();
+              const rr = await Leobog.writeColor(colorExpected);
+              colorPostcheckOk = rr.verified === true;
+              if (colorPostcheckOk) { back = rr.readback; repairedAfterSettings = true; }
             }
-          } catch (e) { /* 读回失败不阻断 */ }
+            if (colorPostcheckOk && back) { S.color = back; S.colorBase = back.slice(); }
+          } catch (e) {
+            colorPostcheckOk = false;
+            Leobog.log('设置块写后色帧复查失败，保留待重试状态：' + e.message, 'warn');
+          }
         }
+        if (hasLedExpected) {
+          try {
+            let back = await Leobog.readLed();
+            if (!ledMatches(back)) {
+              if (doLedRgb) {
+                for (const [mode, rgb] of ledEntries) {
+                  const off = ledColorOffset(mode);
+                  if (back[off] === rgb[0] && back[off + 1] === rgb[1] && back[off + 2] === rgb[2]) continue;
+                  Leobog.log(`[LED] 设置块写入后模式${mode}被回滚，补推单色…`, 'warn');
+                  markLightingWrite();
+                  const rr = await Leobog.writeLed({ rgb, mode });
+                  if (rr.verified !== true) { ledPostcheckOk = false; break; }
+                  if (rr.readback) back = rr.readback;
+                  repairedAfterSettings = true;
+                }
+              } else {
+                const expected = ledRestore || factoryLedExpected;
+                Leobog.log(`[LED] 设置块写入后${ledRestore ? '备份' : '出厂'}参数块被回滚，补推完整块…`, 'warn');
+                markLightingWrite();
+                const rr = await Leobog.writeLed({ block: expected });
+                ledPostcheckOk = rr.verified === true;
+                if (ledPostcheckOk) { back = rr.readback; repairedAfterSettings = true; }
+              }
+            }
+            ledPostcheckOk = ledPostcheckOk && ledMatches(back);
+            if (back) S.ledBlock = back.slice(0, 512);
+          } catch (e) {
+            ledPostcheckOk = false;
+            Leobog.log('设置块写后 LED 复查失败，保留待重试状态：' + e.message, 'warn');
+          }
+        }
+        let lightingSettingsOk = settingsVerified;
+        if (repairedAfterSettings) {
+          await pace(120);
+          Leobog.log('设置块后曾补推灯光数据，再次同值写回设置块以重载灯效运行态…', 'warn');
+          try {
+            const rr = await Leobog.writeSettings((r.readback || fresh).slice());
+            lightingSettingsOk = rr.verified === true;
+            lightingReloadVerified = lightingSettingsOk;
+            if (lightingSettingsOk && rr.readback) {
+              S.settings = rr.readback;
+              S.setOps = []; S.lightOps = []; S.setDirty = false;
+            }
+            if (!lightingSettingsOk) Leobog.log('灯效运行态重载未通过设置块校验，保留待重试状态', 'warn');
+          } catch (e) {
+            lightingSettingsOk = false;
+            Leobog.log('灯效运行态重载失败，保留待重试状态：' + e.message, 'warn');
+          }
+          // 第二次设置事件仍可能回滚刚补推的数据，只复查不再循环写；失败留待下次应用。
+          if (lightingSettingsOk && colorExpected) {
+            try {
+              const back = await Leobog.readColor();
+              colorPostcheckOk = sameBytes(colorExpected, back, 378);
+              if (colorPostcheckOk) { S.color = back; S.colorBase = back.slice(); }
+            } catch (e) { colorPostcheckOk = false; }
+          }
+          if (lightingSettingsOk && hasLedExpected) {
+            try {
+              const back = await Leobog.readLed();
+              ledPostcheckOk = ledMatches(back);
+              if (back) S.ledBlock = back.slice(0, 512);
+            } catch (e) { ledPostcheckOk = false; }
+          }
+        }
+        if (!lightingSettingsOk) {
+          if (colorExpected) colorPostcheckOk = false;
+          if (hasLedExpected) ledPostcheckOk = false;
+        }
+        if (colorExpected) S.colorDirty = !colorPostcheckOk;
+        if (doLedRgb) {
+          for (const [mode, rgb] of ledEntries) {
+            if (lightingSettingsOk && ledPostcheckOk) S.ledColorPending.delete(mode);
+            else S.ledColorPending.set(mode, rgb.slice());
+          }
+        }
+        if (ledRestore) S.ledRestoreBlock = lightingSettingsOk && ledPostcheckOk ? null : ledRestore.slice();
+        if (factoryLedExpected) S.ledPush = !(lightingSettingsOk && ledPostcheckOk);
+        if (!colorPostcheckOk || !ledPostcheckOk || !lightingSettingsOk)
+          Leobog.log('灯效数据或运行态未完成最终校验，已保留待应用状态', 'warn');
       } catch (err) {
+        if (colorExpected) S.colorDirty = true;
+        for (const [mode, rgb] of ledEntries) S.ledColorPending.set(mode, rgb.slice());
+        if (ledRestore) S.ledRestoreBlock = ledRestore.slice();
+        if (doFactoryLed) S.ledPush = true;
         Leobog.log('设置块写入失败：' + err.message, 'bad');
       }
     }
+    // 任一灯光写可能在 ACK/读回失败前已落库。若主管线没有确认过最后的设置事件，
+    // 用设备当前设置做同值写回，只恢复运行态，不偷偷应用尚未完成的表单修改。
+    if (lightingWriteAttempted && !lightingReloadVerified) {
+      await pace(120);
+      Leobog.log('灯光写入后尚无已确认的设置事件，补写设备当前设置以恢复灯效运行态…', 'warn');
+      try {
+        const current = await Leobog.readSettings();
+        const rr = await Leobog.writeSettings(current);
+        lightingReloadVerified = rr.verified === true;
+        if (lightingReloadVerified && rr.readback) S.settings = rr.readback;
+        if (!lightingReloadVerified) Leobog.log('灯效运行态恢复未通过校验，请保持待应用状态并重试', 'warn');
+      } catch (e) {
+        Leobog.log('灯效运行态恢复失败：' + e.message + '；请保持待应用状态并重试', 'bad');
+      }
+    }
+    if (!pipelineOk) Leobog.log('前置写入未通过校验，已跳过后续依赖块并保留待应用状态', 'warn');
   } finally {
-    btn.disabled = false;
-    applying = false;
-    updateDirtyUI();
-    flushPendingUnsol();                           // 写入结束=空闲点：补跑忙时挂起的推送
+    endApplying();                                 // 写入结束=空闲点：补跑忙时挂起的推送
   }
 }
 

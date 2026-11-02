@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LEOBOG ONE</title>
+<link rel="icon" href="data:,">
 <script>
   // 在样式加载前应用主题，避免深色模式首屏闪白。
   (() => {
@@ -132,6 +133,10 @@
 
   /* ── 全局骨架：左侧边栏 + 右主区（16:9 全屏，页面不滚动）── */
   #app { display: flex; height: 100vh; }
+  #app.applying #sidebar, #app.applying #kbzone, #app.applying #panel {
+    pointer-events: none;
+  }
+  #app.applying #panel { opacity: .72; }
   #sidebar { width: 184px; flex: none; display: flex; flex-direction: column;
              background: var(--card); border-right: 1px solid var(--line); }
   #sidebar .brand { padding: 16px 16px 10px; }
@@ -189,6 +194,8 @@
                      cursor: pointer; user-select: none; }
   #logbar .loghead h2 { margin: 0; font-size: 13px; color: var(--muted); flex: 1; min-width: 0;
                         display: flex; align-items: center; gap: 8px; }
+  #logbar .log-actions { display: flex; align-items: center; gap: 6px; }
+  #logbar .log-actions button { padding: 2px 12px; font-size: 12px; margin: 0; }
   #logLast { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   /* 展开态：绝对定位向上覆盖（bottom 贴 loghead 上沿），不参与 flex 挤压 */
   #log { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--card);
@@ -517,6 +524,7 @@
     <div class="tips">允许浏览器连接设备</div>
     <div class="explain" id="landStatus">点击下方按钮，在弹出的设备列表中选择并连接</div>
     <button class="primary" id="landBtn">连接设备</button>
+    <button id="recoveryExportBtn" style="display:none" title="导出自检前原值，即使设备断开也可保留恢复数据">导出自检恢复备份</button>
     <div class="land-guide">
       <div id="guideArt"><div class="device-box">
         <p class="db-title">想连接到 HID 设备</p>
@@ -554,7 +562,7 @@
     <div class="side-foot">
       <a href="https://github.com/nuotu/leobog-one-webui" target="_blank"
          rel="noopener noreferrer" title="打开项目仓库">© nuotu</a>
-      <span class="side-version">v1.0.1</span>
+      <span class="side-version">v1.0.2</span>
     </div>
   </aside>
 
@@ -760,7 +768,10 @@
     <div id="logbar">
       <div class="loghead" id="logHead" title="点击展开/收起日志">
         <h2>日志 <span id="logLast" class="muted" style="font-weight:400;font-size:12px;margin-left:8px"></span></h2>
-        <button id="logCopy" style="padding:2px 12px;font-size:12px;display:none">复制</button>
+        <div class="log-actions">
+          <button id="selfTestBtn" disabled style="display:none" title="完整读写测试：临时修改 LED/色帧并自动恢复">自动测试</button>
+          <button id="logCopy" style="display:none">复制</button>
+        </div>
       </div>
       <div id="log" class="collapsed"></div>
     </div>
@@ -769,8 +780,8 @@
 
 <script src="data/registry.js"></script>
 <script src="data/audiobar.js"></script>
-<script src="protocol.js"></script>
+<script src="protocol.js?v=1.0.2"></script>
 <script src="fw_tables.js"></script>
-<script src="app.js?v=1.0.1"></script>
+<script src="app.js?v=1.0.2"></script>
 </body>
 </html>

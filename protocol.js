@@ -30,6 +30,24 @@ window.Leobog = (function () {
     Array.from(a, b => (b & 0xff).toString(16).padStart(2, '0')).join(sep);
   const hex16 = n => '0x' + (n & 0xffff).toString(16).padStart(4, '0');
   const log = (m, c) => state.log(m, c);
+  function wlChecksumValid(b) {
+    if (!b || b.length < 19) return false;
+    let sum = WL_RID;
+    for (let i = 0; i < 18; i++) sum += b[i];
+    return (sum & 0xff) === b[18];
+  }
+
+  // 配置事务必须串行：写入 + 读回校验是一个不可交错的整体。
+  // 内部函数互相调用原始实现，只有导出的 API 入队，避免嵌套死锁。
+  let ioTail = Promise.resolve();
+  let ioPending = 0;
+  function enqueueIo(fn) {
+    ioPending++;
+    const run = ioTail.then(fn, fn);
+    ioTail = run.catch(() => {}).finally(() => { ioPending--; });
+    return run;
+  }
+  const queued = fn => (...args) => enqueueIo(() => fn(...args));
 
   function* walk(cols, path = '') {
     for (let i = 0; i < cols.length; i++) {
@@ -82,6 +100,12 @@ window.Leobog = (function () {
       count++;
       if (idxs.length < 16) idxs.push(i);
       if (pairs.length < 8) pairs.push(`@${i}:${(a[i] & 0xff).toString(16)}→${(b[i] & 0xff).toString(16)}`);
+    }
+    const expected = Math.min(n, a.length);
+    for (let i = lim; i < expected; i++) {
+      count++;
+      if (idxs.length < 16) idxs.push(i);
+      if (pairs.length < 8) pairs.push(`@${i}:${(a[i] & 0xff).toString(16)}→缺`);
     }
     return { count, idxs, pairs };
   }
@@ -249,7 +273,7 @@ window.Leobog = (function () {
     const dev = state.dev;
     if (!dev.opened) await dev.open();
     const req = frameW(cmd, addr, len);
-    let raw = null, ho = 0, echoCmd, echoAddr, echoLen;
+    let raw = null, ho = 0, echoCmd, echoAddr, echoLen, matched = false;
     const cmdLo = cmd & 0x7f;                     // 部分读命令回显会清 bit7（实测 0x83 疑似）
     for (let a = 1; a <= retries; a++) {
       if (a > 1) await sleep(a > 1 ? 250 : 100);  // 超时类失败给固件更长喘息
@@ -264,16 +288,21 @@ window.Leobog = (function () {
         continue;
       }
       ho = raw[0] === RID ? 1 : 0;
-      if (raw.length < ho + 7) continue;
+      if (raw.length < ho + 7) {
+        if (a === retries) throw new Error(`有线读回包过短：${raw.length}B（至少需要 ${ho + 7}B 头部）`);
+        log(`[有线] 读 cmd=${hex16(cmd)} 第${a}次回包过短 ${raw.length}B，重试`, 'warn');
+        continue;
+      }
       echoCmd = raw[ho];
       echoAddr = raw[ho + 1] | (raw[ho + 2] << 8);
       echoLen = raw[ho + 5] | (raw[ho + 6] << 8);
-      if ((echoCmd === cmd || echoCmd === cmdLo) && echoAddr === addr && echoLen === len) break;
+      if ((echoCmd === cmd || echoCmd === cmdLo) && echoAddr === addr && echoLen === len) { matched = true; break; }
       if (a === retries) {
         throw new Error(`有线读回显不匹配 cmd=${hex16(echoCmd)} addr=${echoAddr} len=${echoLen}` +
           ` 头部=${hex(raw.slice(0, 14))}`);
       }
     }
+    if (!matched) throw new Error(`有线读未获得匹配回包 cmd=${hex16(cmd)} addr=${addr} len=${len}`);
     let payload = raw.slice(ho + 7);
     if (payload.length < echoLen) {                 // 浏览器裁尾零 → 按回显 len 补
       const p = new Uint8Array(echoLen);
@@ -301,15 +330,19 @@ window.Leobog = (function () {
     if (!dev) throw new Error('设备已断开');
     if (!dev.opened) await dev.open();
     let chunks = {}, lastAt = 0, frames = 0, mergeMode = false;
-    let thisFrames = 0, thisLastLen = 14;             // 本轮（attempt）收到的帧数 / 最后一帧长度
+    let thisFrames = 0;                               // 本轮（attempt）收到的帧数
     const onRep = e => {
       if (e.reportId !== WL_RID) return;
       const b = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
-      if (b.length < 4 || b[0] !== cmd) return;
+      if (b.length < 19 || b[0] !== cmd || !wlChecksumValid(b)) {
+        if (b.length >= 4 && b[0] === cmd && opts.stats)
+          opts.stats.badChecksum = (opts.stats.badChecksum || 0) + 1;
+        return;
+      }
       if (mergeMode && (b[2] in chunks)) return;      // 补拉模式：只收缺失片
-      const slice = b.slice(4, 4 + Math.min(b[3], 14));
+      const slice = b.slice(4, 4 + Math.min(b[3] & 0x0f, 14));
       chunks[b[2]] = slice;
-      lastAt = Date.now(); frames++; thisFrames++; thisLastLen = slice.length;
+      lastAt = Date.now(); frames++; thisFrames++;
     };
     // 完整判定：收到 expect 时——无空洞且最大片 ≥ 阈值；键表尾片(tailOptional)结构性常丢，阈值退到 expect-2
     const complete = () => {
@@ -325,7 +358,7 @@ window.Leobog = (function () {
     const attempt = async (merge, tmo = timeoutMs) => {
       mergeMode = !!merge;
       if (!merge) { chunks = {}; lastAt = 0; frames = 0; }
-      thisFrames = 0; thisLastLen = 14;                 // 本轮自己的计数（补拉轮的"旧尾片"不能当终止依据）
+      thisFrames = 0;                                    // 本轮自己的计数（补拉轮的旧帧不能当终止依据）
       dev.addEventListener('inputreport', onRep);
       try {
         const req = opts.frame || wlFrame(cmd, block,
@@ -344,9 +377,9 @@ window.Leobog = (function () {
         while (Date.now() - t0 < tmo) {
           await sleep(80);
           if (complete()) break;                      // 无空洞且到阈值（键表 35 片即齐）
-          // 短尾 terminator：只看**本轮**收到的最后一帧，且本轮必须收到过东西。
-          // （旧写法看全局 chunks[last]，补拉轮会被上一轮的 8B 尾片立刻骗停，中间缺片永远补不上）
-          if (thisFrames && thisLastLen < 14 && Date.now() - lastAt > 200) break;
+          // dongle 按整块突发回流；本轮收到过帧且静默 300ms 即视为本批结束，
+          // 立即进入缺片补拉，不再为已知空洞等满 1.8~3s。只看本轮 lastAt，避免旧尾片骗停。
+          if (thisFrames && Date.now() - lastAt > 300) break;
         }
       } finally {
         dev.removeEventListener('inputreport', onRep);
@@ -397,7 +430,8 @@ window.Leobog = (function () {
       opts.stats.frames = frames; opts.stats.maxIdx = maxIdx;
       opts.stats.gaps = gaps; opts.stats.bytes = got;
     }
-    return data.subarray(0, got);
+    const end = maxIdx * 14 + chunks[maxIdx].length;
+    return data.subarray(0, end);
   }
 
   // ── 写：有线一步 SetFeature（协议规范 §3 写时序）─────────────
@@ -437,8 +471,13 @@ window.Leobog = (function () {
       if (e.reportId !== WL_RID) return;
       const b = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
       if (seen.length < 3) seen.push(`len=${b.length}:${hex(b.subarray(0, 8))}`);
-      if (b.length >= 4 && b[0] === cmd) { echoed.add(b[2] & 0xff); return; }
-      if (b.length < 18) return;
+      if (b.length >= 19 && b[0] === cmd && wlChecksumValid(b)) {
+        const idx = b[2] & 0xff;
+        const sent = frames[idx];
+        if (sent && sent.every((v, i) => b[i] === v)) echoed.add(idx);
+        return;
+      }
+      if (b.length < 19) return;
       for (let i = 0; i < 18; i++) if (b[i] !== 0) return;   // 全零帧 = 官方抓包里的老式 ACK
       zeroAcks++;
     };
@@ -465,12 +504,16 @@ window.Leobog = (function () {
         log(`[无线] 写 cmd=${hex16(cmd)} block=${hex16(block)} 页=${page} 第${round}轮 → ` +
             `回显 累计 ${echoed.size}/${frames.length}${zeroAcks ? ` · 全零ACK ${zeroAcks}` : ''}` +
             `${round > 1 ? `（本轮发 ${todo.length} 片）` : ''}`);
-        if (echoed.size + zeroAcks >= frames.length) break;
+        if (echoed.size === frames.length || zeroAcks > 0) break;
       }
     } finally {
       dev.removeEventListener('inputreport', onRep);
     }
-    return { sent: frames.length, acks: echoed.size + zeroAcks };
+    const complete = echoed.size === frames.length;
+    if (!complete && zeroAcks === 0)
+      throw new Error(`无线写 ACK 不完整 cmd=${hex16(cmd)}：回显 ${echoed.size}/${frames.length}，全零ACK ${zeroAcks}`);
+    // 全零 ACK 无片号，不能按数量冒充逐片确认；交给高层读回校验判定是否真正落库。
+    return { sent: frames.length, acks: echoed.size, ambiguousAck: !complete, zeroAcks };
   }
 
   // ── 网页侧抓包器（B 端对照用：记录 sendReport/inputreport 全帧）──
@@ -536,7 +579,8 @@ window.Leobog = (function () {
     const frames = [];
     const onRep = e => {
       if (e.reportId !== WL_RID) return;
-      frames.push(new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength).slice());
+      const b = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
+      if (wlChecksumValid(b)) frames.push(b.slice());
     };
     dev.addEventListener('inputreport', onRep);
     try {
@@ -594,7 +638,7 @@ window.Leobog = (function () {
   async function readSettings() {
     let p;
     if (state.channel === 'wired') p = await wiredRead(0x84, 0, 128);
-    else p = await wlRead(0x44, 0x01, 2500, { expect: 10, strict: true, minBytes: 128 });
+    else p = await wlRead(0x44, 0x01, 1800, { expect: 10, strict: true, minBytes: 128 });
     // byte14 = 无线链路标志（00=有线/01=无线，已结案）——只报异常值，正常值静默
     if (p && p.length > 14) {
       const exp = state.channel === 'wireless' ? 0x01 : 0x00;
@@ -607,7 +651,7 @@ window.Leobog = (function () {
   // ── 读逐键色帧（378B = 126 槽 × RGB；有线0x86 / 无线0x42）────
   async function readColor() {
     if (state.channel === 'wired') return await wiredRead(0x86, 0, 378, 8);
-    return await wlRead(0x42, 0x1b, 3000, { expect: 27, strict: true, minBytes: 378, retries: 3 });
+    return await wlRead(0x42, 0x1b, 1800, { expect: 27, strict: true, minBytes: 378, retries: 3 });
   }
 
   // ── 宏区格式（逆向指南 §8.4）────────────────────────────────
@@ -709,7 +753,7 @@ window.Leobog = (function () {
     if (state.channel === 'wired') return await wiredRead(0x85, 0, 512, 8);
     // 宏区实际只用前 504B（目录 32B + 记录），尾 8B 是 flash 页尾标记——和键表一样会结构性丢尾片，
     // 所以只要求 504B，补齐到 512B（全零）即可，不能因为少 8 字节就把整个宏面板判失败。
-    const p = await wlRead(0x43, 0, 3000, { expect: 37, tailOptional: true, strict: true, minBytes: 504, retries: 3 });
+    const p = await wlRead(0x43, 0, 1800, { expect: 37, tailOptional: true, strict: true, minBytes: 504, retries: 3 });
     if (p.length >= 512) return p;
     const d = new Uint8Array(512);
     d.set(p);
@@ -719,6 +763,7 @@ window.Leobog = (function () {
   // ── 写宏区（整区重写：紧凑目录+记录；有线0x05 / 无线0x03）─────
   async function writeMacro(payload, opts = {}) {
     if (!state.channel) throw new Error('设备已断开，请重新连接');
+    assertWriteTarget(opts);
     if (payload.length < 4 || payload.length > 504)
       throw new Error(`宏区载荷需 4~504B，收到 ${payload.length}B`);
     if (state.channel === 'wired') await wiredWrite(0x05, 0, payload);
@@ -772,7 +817,7 @@ window.Leobog = (function () {
     };
     try {
       if (page === 0 || !_wlKmP0) {
-        const p0 = await wlRead(0x41, 0, 3500, { expect: 37, tailOptional: true });
+        const p0 = await wlRead(0x41, 0, 1800, { expect: 37, tailOptional: true });
         log(`[无线] 页0 基准 头8B: ${hex(p0.slice(0, 8))}`);
         _wlKmP0 = finish(p0, '默认帧');
         if (page === 0) return _wlKmP0;
@@ -780,7 +825,7 @@ window.Leobog = (function () {
       // X 高4位=页；低4位试 0x0e（写侧满片值）与 0x00（读侧缺省值）
       for (const X of [(page << 4) | 0x0e, (page << 4) | 0x00]) {
         let p;
-        try { p = await wlRead(0x41, 0, 3500, { lenField: X, expect: 37, tailOptional: true }); }
+        try { p = await wlRead(0x41, 0, 1800, { lenField: X, expect: 37, tailOptional: true }); }
         catch (e) { log(`[无线] X=${hex16(X)} 无回流`, 'warn'); continue; }
         log(`[无线] X=${hex16(X)} 头8B: ${hex(p.slice(0, 8))}`);
         const d = finish(p, `X=${hex16(X)}`);
@@ -803,8 +848,14 @@ window.Leobog = (function () {
   }
 
   // ── 写 + 读回校验（Phase 2 核心：写完必须读回逐字节比对）───────
+  function assertWriteTarget(opts) {
+    // 入队时的自检目标必须在事务真正执行时仍匹配，不能把旧快照写到新设备。
+    if (opts.expectedDeviceKey && opts.expectedDeviceKey !== devKey(state.dev))
+      throw new Error('设备已切换，拒绝向其他设备写入自检数据');
+  }
   async function writeKeymap(page, data, opts = {}) {
     if (!state.channel) throw new Error('设备已断开，请重新连接');
+    assertWriteTarget(opts);
     if (!Number.isInteger(page) || page < 0 || page > 3) throw new Error('键表页号越界：' + page);
     if (data.length < 512) throw new Error(`键表页需 512B，收到 ${data.length}B`);
     const buf = data.subarray(0, 512);
@@ -823,41 +874,70 @@ window.Leobog = (function () {
 
   async function writeSettings(data, opts = {}) {
     if (!state.channel) throw new Error('设备已断开，请重新连接');
+    assertWriteTarget(opts);
     if (data.length < 128) throw new Error(`设置块需 128B，收到 ${data.length}B`);
     const buf = data.subarray(0, 128);
     if (state.channel === 'wired') await wiredWrite(0x04, 0, buf);
     else await wlWrite(0x04, 0x0a, buf);
     if (opts.verify === false) return { written: true, verified: null };
-    let got = null, err = null;
-    try { got = await readSettings(); } catch (e) { err = e.message; }
+    const maxChecks = state.channel === 'wireless' ? 3 : 1;
+    let got = null, err = null, st = null;
+    for (let attempt = 1; attempt <= maxChecks; attempt++) {
+      try {
+        const cur = await readSettings();
+        if (cur) {
+          got = cur; st = diffStats(buf, cur, 128);
+          if (st.count === 0) {
+            log(`[校验] 设置块 ✅ 一致${attempt > 1 ? `（第${attempt}次读回）` : ''}`);
+            return { written: true, verified: true, diffCount: 0, idxs: [], readback: cur, verifyAttempts: attempt };
+          }
+          if (st.idxs.every(i => i === 14)) {
+            log(`[校验] 设置块 ⚠️ 仅字节14 不一致 ${st.pairs.join(' ')} —— 设备自管，视为通过（其余一致）`, 'warn');
+            return { written: true, verified: true, diffCount: st.count, idxs: st.idxs,
+              volatile: [14], readback: cur, verifyAttempts: attempt };
+          }
+        }
+      } catch (e) { err = e.message; }
+      if (attempt < maxChecks) {
+        log(`[校验] 设置块读回尚未稳定${st ? `（差异 ${st.count}B）` : ''}，${attempt * 300}ms 后复查`, 'warn');
+        await sleep(attempt * 300);
+      }
+    }
     if (!got) return { written: true, verified: false, error: err || '读回为空' };
-    const st = diffStats(buf, got, 128);
-    if (st.count === 0) {
-      log('[校验] 设置块 ✅ 一致');
-      return { written: true, verified: true, diffCount: 0, idxs: [], readback: got };
-    }
-    if (st.idxs.every(i => i === 14)) {
-      // 字节14 复现3次"回显10/10 + 干净读回仍不一致"——官方13次写从未触及，判为设备自管字段
-      log(`[校验] 设置块 ⚠️ 仅字节14 不一致 ${st.pairs.join(' ')} —— 疑似设备自管，视为通过（其余一致）`, 'warn');
-      return { written: true, verified: true, diffCount: st.count, idxs: st.idxs, volatile: [14], readback: got };
-    }
     log(`[校验] 设置块 ❌ ${st.count} 字节不一致 ${st.pairs.join(' ')}`);
-    return { written: true, verified: false, diffCount: st.count, idxs: st.idxs, readback: got };
+    return { written: true, verified: false, diffCount: st.count, idxs: st.idxs,
+      readback: got, verifyAttempts: maxChecks };
   }
 
   async function writeColor(data, opts = {}) {
     if (!state.channel) throw new Error('设备已断开，请重新连接');
+    assertWriteTarget(opts);
     if (data.length < 378) throw new Error(`色帧需 378B，收到 ${data.length}B`);
     const buf = data.subarray(0, 378);
     if (state.channel === 'wired') await wiredWrite(0x06, 0, buf);
     else await wlWrite(0x02, 0x1b, buf);
     if (opts.verify === false) return { written: true, verified: null };
-    let got = null, err = null;
-    try { got = await readColor(); } catch (e) { err = e.message; }
+    const maxChecks = state.channel === 'wireless' ? 3 : 1;
+    let got = null, err = null, st = null;
+    for (let attempt = 1; attempt <= maxChecks; attempt++) {
+      try {
+        const cur = await readColor();
+        if (cur) {
+          got = cur; st = diffStats(buf, cur, 378);
+          if (st.count === 0) {
+            log(`[校验] 色帧 ✅ 一致${attempt > 1 ? `（第${attempt}次读回）` : ''}`);
+            return { written: true, verified: true, diffCount: 0, idxs: [], readback: cur, verifyAttempts: attempt };
+          }
+        }
+      } catch (e) { err = e.message; }
+      if (attempt < maxChecks) {
+        log(`[校验] 色帧首次读回尚未稳定${st ? `（差异 ${st.count}B）` : ''}，${attempt * 300}ms 后复查`, 'warn');
+        await sleep(attempt * 300);
+      }
+    }
     if (!got) return { written: true, verified: false, error: err || '读回为空' };
-    const st = diffStats(buf, got, 378);
-    log(`[校验] 色帧 ${st.count === 0 ? '✅ 一致' : `❌ ${st.count} 字节不一致 ${st.pairs.join(' ')}`}`);
-    return { written: true, verified: st.count === 0, diffCount: st.count, idxs: st.idxs, readback: got };
+    log(`[校验] 色帧 ❌ ${st.count} 字节不一致 ${st.pairs.join(' ')}`);
+    return { written: true, verified: false, diffCount: st.count, idxs: st.idxs, readback: got, verifyAttempts: maxChecks };
   }
 
   // ── 音乐律动流（有线 0x08 整帧378B；无线 0x88 TLV 全量快照逐片）──
@@ -911,6 +991,8 @@ window.Leobog = (function () {
     const d = new Uint8Array(512);
     d.set(p.subarray(0, p.length));                  // 已到的部分原样保留（可能到 504）
     if (p.length < 508) { d[506] = 0x5a; d[507] = 0xa5; }   // 尾部未到才补魔数；到了但值不对就不伪造
+    d.syntheticTail = true;
+    d.verifiedBytes = p.length;
     if (!_ledTailNoted) {
       _ledTailNoted = true;
       log('[LED] 0x49 只回 490B（35/37 片，尾片 35/36 不回流）→ 尾 22B 按官方写帧常量补齐', 'warn');
@@ -921,7 +1003,8 @@ window.Leobog = (function () {
   async function readLed() {
     if (state.channel === 'wired') return await wiredRead(0x8a, 0, 512, 3);
     // expect 降到 35（=收到第 34 片即收工）：一次改色原要 2×4s 空转，现在正常 <1s。
-    return padLedTail(await wlRead(0x49, 0x25, 6000, { expect: 35 }));
+    return padLedTail(await wlRead(0x49, 0x25, 1800,
+      { expect: 35, strict: true, minBytes: 490, retries: 3 }));
   }
 
   // 诊断探针（控制台）：Leobog.ledProbe() —— 判定"设备只发 35 片"还是"窗口不够长"
@@ -973,11 +1056,16 @@ window.Leobog = (function () {
 
   async function writeLed(opts = {}) {
     if (!state.channel) throw new Error('设备已断开，请重新连接');
+    assertWriteTarget(opts);
     const slot = ledColorOffset(opts.mode);              // 模式 k → 21+(k-1)*21
     // 读-改-写：改色必须基于设备当前块。读不到可信基底就中止，
     // 绝不退回出厂常量——那会把其它模式的颜色槽和色带一起冲掉（2026-11-01 实测风险）。
     let base = null;
-    if (opts.rgb) {
+    if (opts.block) {
+      const raw = opts.block instanceof Uint8Array ? opts.block : Uint8Array.from(opts.block);
+      if (!ledBlockSane(raw)) throw new Error('备份 LED 参数块不可信（需 512B、尾 5A A5、非全零）');
+      base = raw.slice(0, 512);
+    } else if (opts.rgb) {
       for (let attempt = 1; attempt <= 2 && !base; attempt++) {
         try {
           const cur = await readLed();
@@ -1017,13 +1105,14 @@ window.Leobog = (function () {
     try { got = await readLed(); } catch (e) { log(`[LED] 读回失败：${e.message}`, 'warn'); }
     if (!got || got.length < 512) return { written: true, verified: false, error: '读回失败' };
     if (got.every(v => v === 0)) return { written: true, verified: null, error: '读回全零（0x8a 可能不支持）' };
+    const verifiedBytes = got.syntheticTail ? Math.min(got.verifiedBytes || 490, 512) : 512;
     const idxs = [];
-    for (let i = 0; i < 512; i++) if (block[i] !== got[i]) idxs.push(i);
+    for (let i = 0; i < verifiedBytes; i++) if (block[i] !== got[i]) idxs.push(i);
     log(`[LED] 读回 [${slot}..${slot + 2}]=${hex(got.slice(slot, slot + 3))}（写入 ${hex(block.slice(slot, slot + 3))}）` +
         ` · 差异 ${idxs.length} 字节` + (idxs.length ? ` @${idxs.slice(0, 12).join(',')}` : ''),
         idxs.length ? 'warn' : 'ok');
-    return { written: true, verified: idxs.length === 0, diffCount: idxs.length,
-             idxs: idxs.slice(0, 16), readback: got };
+    return { written: true, verified: idxs.length === 0, partial: verifiedBytes < 512, verifiedBytes,
+             diffCount: idxs.length, idxs: idxs.slice(0, 16), readback: got };
   }
 
   // ── 断开事件 ──────────────────────────────────────────────
@@ -1038,15 +1127,21 @@ window.Leobog = (function () {
   }
 
   return {
-    connect, connectExisting, knownDevices, selectDevice, disconnect, classify, walk, reportBits, devKey,
-    wiredRead, wlRead, wlFrame, frameW, wlChunks,
-    wiredWrite, wlWrite,
-    readPSD, psdProbe, readSettings, readColor, readLed, ledProbe, readKeymap, readMacro, readTelemetry,
-    writeKeymap, writeSettings, writeColor, writeMacro, writeLed,
+    connect: queued(connect), connectExisting: queued(connectExisting), knownDevices,
+    selectDevice: queued(selectDevice), disconnect: queued(disconnect), classify, walk, reportBits, devKey,
+    wiredRead: queued(wiredRead), wlRead: queued(wlRead), wlFrame, frameW, wlChunks,
+    wiredWrite: queued(wiredWrite), wlWrite: queued(wlWrite),
+    readPSD: queued(readPSD), psdProbe: queued(psdProbe),
+    readSettings: queued(readSettings), readColor: queued(readColor), readLed: queued(readLed),
+    ledProbe: queued(ledProbe), readKeymap: queued(readKeymap), readMacro: queued(readMacro),
+    readTelemetry: queued(readTelemetry),
+    writeKeymap: queued(writeKeymap), writeSettings: queued(writeSettings),
+    writeColor: queued(writeColor), writeMacro: queued(writeMacro), writeLed: queued(writeLed),
     sendMusicFrame, sendMusicChunk, sendMusicPoll,
     startCapture, stopCapture,
     parseMacroArea, buildMacroArea, utf16Bytes, utf16Str,
     hex, hex16,
+    get ioPending() { return ioPending; },
     get state() { return state; },
     get log() { return state.log; },
     set log(fn) { state.log = fn; },
