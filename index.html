@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LEOBOG ONE</title>
+<style>
+  /* ── 主题变量（M HUB 风格：CSS 变量驱动，浅/深双主题）── */
+  :root {
+    --bg: #f2f4f8; --card: #ffffff; --fg: #1b1f24; --muted: #6b7480;
+    --line: #dde2e8; --accent: #2f6df6; --accent-soft: #2f6df622;
+    --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700;
+    --kb-case: #e8ebf0; --kb-case-border: #c9d0da;
+    --key-bg: linear-gradient(180deg, #ffffff 0%, #eef1f5 100%);
+    --key-border: #c8cfd8; --key-fg: #242a31;
+    --key-special: linear-gradient(180deg, #e8f0ff 0%, #d6e4ff 100%);
+    --key-empty: #f4f6f9;
+    --shadow-key: 0 1.5px 0 #b8c0cc, 0 2px 4px rgba(20,30,50,.10);
+    --shadow-key-hover: 0 0 0 2px var(--accent), 0 2px 8px rgba(47,109,246,.35);
+    --knob: #d5dae2; --knob-ring: #aab3bf;
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151a; --card: #1b2028; --fg: #e6eaf0; --muted: #8b95a3;
+    --line: #2c333d; --accent: #5b8dff; --accent-soft: #5b8dff33;
+    --kb-case: #232933; --kb-case-border: #323a46;
+    --key-bg: linear-gradient(180deg, #3a424e 0%, #2b323c 100%);
+    --key-border: #454e5c; --key-fg: #e6eaf0;
+    --key-special: linear-gradient(180deg, #2c3f63 0%, #243655 100%);
+    --key-empty: #262c35;
+    --shadow-key: 0 1.5px 0 #14181e, 0 2px 5px rgba(0,0,0,.45);
+    --shadow-key-hover: 0 0 0 2px var(--accent), 0 2px 10px rgba(91,141,255,.4);
+    --knob: #3a424e; --knob-ring: #555f6d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { font: 15px/1.6 -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
+         color: var(--fg); background: var(--bg); margin: 0; overflow: hidden; }
+  h1 { font-size: 21px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 10px; border: 0; padding: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 13px; background: var(--bg);
+         padding: 1px 5px; border-radius: 4px; }
+  button { font: 14px/1 inherit; padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px;
+           background: var(--card); color: var(--fg); cursor: pointer; margin-right: 8px; }
+  button:hover { border-color: var(--accent); } button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+  button.danger:hover { background: #cf222e14; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 14px;
+         background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; }
+  .bar .grow { flex: 1; }
+  /* 待写入提示：跟在「应用修改」后面，单行省略，悬停看完整 */
+  .apply-hint { flex: 0 1 auto; min-width: 0; font-size: 12px; color: var(--muted);
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px;
+           background: #fff8c5; border: 1px solid #d4a72c66; color: var(--warn); }
+  :root[data-theme="dark"] .badge { background: #3a3316; border-color: #6e5a1e; }
+
+  /* ── 连接页（对齐 mchose connectDevice：提示 + 连接按钮 + 选择器示意图）── */
+  #landing { position: fixed; inset: 0; z-index: 50; display: flex; background: var(--bg); overflow: auto; }
+  .land-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+               padding: 24px; min-height: 700px; }
+  .land-wrap .tips { font-size: 17px; font-weight: 600; color: var(--fg); margin-bottom: 8px; }
+  .land-wrap .explain { font-size: 13.5px; color: var(--muted); margin-bottom: 24px; min-height: 22px;
+                        text-align: center; max-width: 560px; }
+  .land-wrap #landStatus { min-height: 40px; width: 100%; max-width: 560px; text-align: center;
+                           font-size: 13.5px; margin-bottom: 4px; display: flex; align-items: center;
+                           justify-content: center; }
+  .land-wrap #landBtn { font-size: 15px; padding: 11px 28px; border-radius: 999px; margin-bottom: 10px; }
+  .land-wrap #landBtn::before { content: '＋'; display: inline-flex; width: 20px; height: 20px;
+        margin-right: 8px; border-radius: 50%; background: rgba(255,255,255,.28); color: #fff;
+        align-items: center; justify-content: center; font-size: 13px; font-weight: 700; line-height: 1; }
+  .land-guide { width: 800px; height: 414px; border-radius: 16px; background: var(--card);
+                border: 1px solid var(--line); padding: 52px 218px; box-sizing: border-box; margin-top: 6px; }
+  .device-box { background: var(--bg); border-radius: 8px; padding: 12px 11px; margin: 8px 0;
+                text-align: left; }
+  .device-box .db-title { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+  .pm { position: relative; height: 164px; border: 1px solid var(--line); border-radius: 4px;
+        background: var(--card); margin-top: 8px; }
+  .pm-head { height: 32px; background: var(--bg); border-radius: 3px 3px 0 0; font-size: 12px;
+             line-height: 32px; padding: 0 16px; color: var(--fg); }
+  .pm-badge { position: absolute; display: inline-flex; align-items: center; gap: 6px; height: 31px;
+              padding: 0 9px; border: 1px solid var(--line); background: var(--card); border-radius: 20px;
+              font-size: 14px; font-weight: 600; color: var(--fg); box-shadow: 0 2px 8px rgba(15,25,40,.14); }
+  .pm-badge .num { display: inline-flex; width: 16px; height: 16px; border-radius: 50%;
+                   background: var(--accent); color: #fff; font-size: 12px; align-items: center;
+                   justify-content: center; line-height: 1; }
+  .pm-badge.b1 { top: 18px; left: 95px; }
+  .pm-badge.b2 { bottom: -6px; right: -3px; }
+  .pm-arrow { position: absolute; width: 0; height: 0; }
+  .pm-arrow.a1 { top: 23px; left: 77px; border-left: 14px solid var(--accent);
+                 border-top: 7px solid transparent; border-bottom: 7px solid transparent; }
+  .pm-arrow.a2 { bottom: -44px; right: 8px; border-bottom: 14px solid var(--accent);
+                 border-left: 7px solid transparent; border-right: 7px solid transparent; }
+  .pm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+  .pm-actions .mock-btn { height: 33px; padding: 0 16px; border-radius: 24px; font-size: 12px;
+                          line-height: 33px; }
+  .pm-actions .mock-btn.cancel { border: 1px solid var(--line); background: transparent; color: var(--fg); }
+  .pm-actions .mock-btn.ok { background: var(--accent); color: #fff; }
+  .land-list { width: 100%; display: flex; flex-direction: column; gap: 10px;
+               max-height: 268px; overflow-y: auto; text-align: left; }
+  .dev-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+             padding: 13px 14px; border: 1px solid var(--line); background: var(--card);
+             border-radius: 10px; cursor: pointer; font: inherit; color: var(--fg);
+             margin: 0; }
+  .dev-row:hover { border-color: var(--accent); }
+  .dev-row.sleep { opacity: .78; }
+  .dev-row.busy { pointer-events: none; opacity: .6; }
+  .dev-chip { flex: none; min-width: 46px; text-align: center; font-size: 12px; padding: 4px 0;
+              border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .dev-info { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .dev-name { font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+  .dev-sub { font-size: 12.5px; margin-top: 2px; }
+  .dev-sub.ok { color: var(--ok); }
+  .dev-sub.warn { color: var(--warn); }
+  .dev-sub.bad { color: var(--bad); }
+  .dev-go { flex: none; font-size: 13px; color: var(--accent); font-weight: 600; }
+  .land-foot { margin-top: 14px; text-align: center; font-size: 12px; color: var(--muted); }
+  .land-theme { margin-top: 12px; }
+  .land-theme #landTheme { padding: 5px 16px; font-size: 13px; }
+
+  /* ── 全局骨架：左侧边栏 + 右主区（16:9 全屏，页面不滚动）── */
+  #app { display: flex; height: 100vh; }
+  #sidebar { width: 184px; flex: none; display: flex; flex-direction: column;
+             background: var(--card); border-right: 1px solid var(--line); }
+  #sidebar .brand { padding: 16px 16px 10px; }
+  #sidebar .brand h1 { font-size: 17px; margin: 0; }
+  #sidebar .brand .sub { font-size: 12px; }
+  #nav { display: flex; flex-direction: column; gap: 4px; padding: 8px; flex: 1; }
+  #nav button { display: block; width: 100%; text-align: left; padding: 11px 14px;
+                border-radius: 10px; border: 1px solid transparent; background: transparent;
+                color: var(--fg); font-size: 14px; margin: 0; }
+  #nav button:hover { border-color: var(--line); background: var(--bg); }
+  #nav button.on { background: var(--accent-soft); border-color: var(--accent);
+                   color: var(--accent); font-weight: 600; }
+  #sidebar .side-foot { padding: 10px; border-top: 1px solid var(--line); }
+  #sidebar .side-foot button { width: 100%; margin: 0; }
+
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #topbar { flex: none; margin: 0; border-radius: 0; border-left: 0; border-right: 0; border-top: 0; }
+  /* 上半：键盘区——键盘居中；层切换绝对定位紧贴键盘右侧（fitKeyboard 计算坐标） */
+  #kbzone { flex: 0 0 48%; min-height: 0; position: relative; padding: 6px 14px 2px;
+            -webkit-user-select: none; user-select: none;
+            -webkit-user-drag: none; -webkit-touch-callout: none; }
+  /* 键盘区内一律不可选中：拖拽划选键位时不会拉起浏览器的"复制"悬浮条 */
+  #kbzone * { -webkit-user-select: none; user-select: none;
+              -webkit-user-drag: none; -webkit-touch-callout: none; }
+  #keyboard { position: absolute; inset: 6px 14px 2px; overflow: hidden;
+              display: flex; align-items: center; justify-content: center; }
+  #layerTabs { position: absolute; display: flex; flex-direction: column; gap: 8px;
+               justify-content: center; z-index: 2; }
+  #layerTabs button { margin-right: 0; white-space: nowrap; }
+  #layerTabs button.on { border-color: var(--accent); color: var(--accent); font-weight: 600;
+                         background: var(--accent-soft); }
+  /* 下半：参数面板（M HUB 通栏多列：选中分区铺满整宽，列间竖线，列头+横线） */
+  #panel { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 0;
+           background: var(--card); border-top: 1px solid var(--line); }
+  .pane { display: none; height: 100%; min-height: 0; }
+  .pane.on { display: flex; flex-direction: row; align-items: stretch; }
+  .pcol { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+          padding: 10px 16px 8px; border-right: 1px solid var(--line); overflow: hidden; }
+  .pcol:last-child { border-right: 0; }
+  .pcol-h { flex: none; font-size: 15px; font-weight: 600; color: var(--fg);
+            padding: 0 0 6px; margin: 0 0 8px; border-bottom: 1px solid var(--line); }
+  .pcol-body { flex: 1; min-height: 0; overflow-y: auto; }
+  .pcol-body > .muted:first-child { margin-top: 0; }
+  .pane .card { background: transparent; border: 0; border-radius: 0;
+                padding: 0; box-shadow: none; }
+  .pane .bar { background: transparent; border: 0; padding: 0; margin-bottom: 10px; }
+  /* 底部日志（默认折叠；展开时覆盖层浮在上方，不挤压键盘/参数区） */
+  #logbar { flex: none; position: relative; z-index: 20;
+            background: var(--card); border-top: 1px solid var(--line); padding: 2px 14px 6px; }
+  #logbar .loghead { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+                     cursor: pointer; user-select: none; }
+  #logbar .loghead h2 { margin: 0; font-size: 13px; color: var(--muted); flex: 1; min-width: 0;
+                        display: flex; align-items: center; gap: 8px; }
+  #logLast { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  /* 展开态：绝对定位向上覆盖（bottom 贴 loghead 上沿），不参与 flex 挤压 */
+  #log { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--card);
+         border: 1px solid var(--line); border-radius: 0; padding: 8px 12px;
+         position: absolute; left: 0; right: 0; bottom: 100%;
+         max-height: 36vh; overflow: auto; margin: 0;
+         box-shadow: 0 -4px 16px rgba(15,25,40,.12); }
+  #log.collapsed { display: none; }
+
+  /* ── 键盘：底壳 + 键帽（M HUB 单位网格观感）── */
+  .kb { position: relative; transform-origin: center center; }
+  .kb .case { position: absolute; inset: 0; }
+  .key { position: absolute; border: 1px solid var(--key-border); border-radius: 7px;
+         background: var(--key-bg); display: flex; flex-direction: column; align-items: center;
+         justify-content: center; overflow: hidden; box-shadow: var(--shadow-key);
+         color: var(--key-fg); cursor: pointer; transition: box-shadow .12s, transform .08s; }
+  .key:hover { box-shadow: var(--shadow-key-hover); z-index: 2; }
+  .key:active { transform: translateY(1px); }
+  .key .kn { font-size: 13px; font-weight: 600; line-height: 1.15; max-width: 96%;
+             overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical;
+             -webkit-line-clamp: 3; word-break: break-all; text-align: center; }
+  .key .kb2 { font-size: 11px; color: var(--accent); line-height: 1.15; max-width: 96%;
+              overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical;
+              -webkit-line-clamp: 2; word-break: break-all; text-align: center; }
+  .key.special { background: var(--key-special); }
+  .key.empty { background: var(--key-empty); opacity: .6; }
+  .key.sel { box-shadow: var(--shadow-key-hover); z-index: 3; }
+  /* 自定义模式上色：键盘当画布，--cs = 该键当前色（选中=调色盘色 / 未选=黑） */
+  /* 未选中 = 熄灭（0,0,0）；选中 = 点亮（当前色 + 同色辉光） */
+  .kb.color-mode .key { background: var(--cs, #000); border-color: rgba(255,255,255,.10);
+    color: #fff; box-shadow: inset 0 0 0 1px rgba(0,0,0,.55); }
+  .kb.color-mode .key .kn { color: rgba(255,255,255,.42); }
+  .kb.color-mode .key .kb2 { display: none; }
+  .kb.color-mode .key:hover { box-shadow: 0 0 0 2px var(--accent); z-index: 2; }
+  .kb.color-mode .key.cs-on { box-shadow: 0 0 10px var(--cs, transparent), 0 0 2px var(--cs, transparent),
+    inset 0 0 0 1px rgba(255,255,255,.28); }
+  .kb.color-mode .key.cs-on .kn { color: #fff; }
+  .cs-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .cs-bar button { padding: 4px 10px; font-size: 12.5px; }
+  .cs-bar b { color: var(--accent); }
+  /* 自定义模式：画笔工具竖排贴在调色盘右侧（第 4 列） */
+  .cp.with-tools { grid-template-columns: 160px 18px 1fr auto; }
+  .cs-bar.col { margin: 0; width: 100%; display: grid; grid-template-columns: 1fr 1fr;
+    gap: 6px; align-content: start; }
+  .cs-bar.col button { width: 100%; padding: 4px 2px; font-size: 12px; white-space: nowrap; }
+  .cs-bar.col > span { grid-column: 1 / -1; font-size: 12px; }
+  .cs-bar.col button[data-cs="eraser"] { grid-column: 1 / -1; }
+  /* 橡皮是"模式开关"：开启时高亮，再点取消 */
+  .cs-bar button.on { border-color: var(--accent); color: var(--accent);
+    background: var(--accent-soft); font-weight: 600; }
+
+  table { border-collapse: collapse; margin: 6px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 5px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--bg); font-weight: 600; white-space: nowrap; }
+  #kmEditor label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+  #kmEditor select, #kmEditor input, #settings input, #settings select,
+  #lightParams select, #lightParams input[type=number], #lightParams input[type=text] {
+    font: 13px inherit; padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px;
+    background: var(--card); color: var(--fg); }
+  /* 全站数字输入框统一去掉上下箭头（滚轮/键盘/直接输入照旧可用） */
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+  /* 104 键选择器（宏编辑器专用，覆盖在键位预览区上） */
+  #mpOverlay { position: absolute; inset: 0; z-index: 30; background: var(--bg);
+               display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
+  #mpBar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 13px; }
+  #mpKeys { position: relative; flex: 1; min-height: 0; }
+  #mpKb { position: absolute; inset: 0; }
+  #mpKb .key { cursor: pointer; }
+  #mpKb .key.mk { border-color: var(--accent); }
+  #mpKb .key.mk .kn { color: var(--accent); font-weight: 600; }
+  #mpKb .key:hover { border-color: var(--accent); color: var(--accent);
+                     box-shadow: var(--shadow-key-hover); z-index: 2; }
+  /* 宏编辑器（动作序列式：键帽 = 动作，连接线上的数字 = 动作后的等待） */
+  #macroEditor { display: flex; flex-direction: column; gap: 8px; }
+  .me-bar { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
+  .me-grow { flex: 1 1 auto; }
+  .me-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 999px;
+             background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; }
+  .me-chip b { font-variant-numeric: tabular-nums; }
+  #macroEditor .me-name { width: 156px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+             background: var(--bg); color: var(--fg); font: 13px inherit; }
+  #macroEditor .me-name:focus { outline: none; border-color: var(--accent);
+             box-shadow: 0 0 0 3px var(--accent-soft); }
+  .me-bar button { padding: 6px 13px; font-size: 13px; border-radius: 8px; margin-right: 0; }
+  .me-sub { margin-top: 2px; }
+  .me-info { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  /* 动作 = 键帽；键帽之间的连接线就是"执行后等待"的延时 */
+  .me-keys { display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start;
+             gap: 12px 0; min-height: 64px; padding: 16px 2px 2px; border-top: 1px solid var(--line); }
+  .mku { display: inline-flex; align-items: center; }
+  .mkc { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+         min-width: 46px; max-width: 120px; height: 44px; padding: 0 10px;
+         border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--fg);
+         font: 12.5px/1 ui-monospace, Consolas, monospace; box-shadow: 0 1px 0 rgba(0,0,0,.06);
+         user-select: none; }
+  .mkc-a { font-size: 12px; opacity: .7; }
+  .mkc-k { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mkc.down { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .mkc.up { color: var(--muted); background: var(--bg); box-shadow: none; }
+  .mkc.mouse::before { content: ''; width: 8px; height: 12px; border: 1px solid currentColor;
+                       border-radius: 5px; opacity: .5; background-image: linear-gradient(currentColor, currentColor);
+                       background-size: 1.5px 3px; background-position: 50% 2px; background-repeat: no-repeat; }
+  .mkc .mkc-x { position: absolute; top: -7px; right: -7px; width: 17px; height: 17px; margin: 0; padding: 0;
+                border: 1px solid var(--line); border-radius: 50%; background: var(--card); color: var(--muted);
+                font-size: 11px; line-height: 14px; text-align: center; cursor: pointer; display: none; }
+  .mkc:hover .mkc-x { display: block; }
+  .mkl { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); font-size: 12px; }
+  .mkl::before, .mkl::after { content: ''; width: 9px; height: 1px; background: var(--line); }
+  #macroEditor .mkl input.mkd { width: 56px; height: 26px; padding: 2px 6px; text-align: right;
+                border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted);
+                font: 12px ui-monospace, Consolas, monospace; }
+  .mkl.long input.mkd { color: var(--warn); border-color: var(--warn); }
+  .mkc.plus { border-style: dashed; color: var(--muted); cursor: pointer; font-size: 17px; padding: 0; }
+  .mkc.plus:hover { border-color: var(--accent); color: var(--accent); }
+  .me-empty { padding: 4px 10px 4px 0; color: var(--muted); font-size: 13px; }
+  /* 统一延时：自绘勾选框，勾上时 ✔ 亮起 */
+  .me-uni { display: inline-flex; align-items: center; gap: 5px; font-size: 13px;
+            cursor: pointer; user-select: none; }
+  .me-uni input[type=checkbox] { position: absolute; opacity: 0; width: 0; height: 0; }
+  .me-uni-c { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+              border: 1px solid var(--line); border-radius: 6px; background: var(--card);
+              color: transparent; font-size: 13px; line-height: 1; transition: color .12s, border-color .12s, background .12s; }
+  .me-uni input:checked + .me-uni-c { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .me-uni input:focus-visible + .me-uni-c { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* 宏列表：双栏卡片（左 4 右 4），操作按钮悬停浮出 */
+  .mc-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(4, auto);
+             grid-auto-columns: minmax(0, 1fr); gap: 8px; }
+  .mc { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; height: 58px;
+        padding: 0 10px 0 11px; border: 1px solid var(--line); border-radius: 12px;
+        background: var(--card); cursor: pointer; user-select: none;
+        transition: border-color .12s, background .12s, box-shadow .12s, transform .12s; }
+  .mc:hover { border-color: var(--accent); box-shadow: 0 6px 16px rgba(15, 25, 40, .10); transform: translateY(-1px); }
+  .mc.cur { border-color: var(--accent); background: var(--accent-soft);
+            box-shadow: inset 3px 0 0 0 var(--accent); }
+  .mc-no { flex: none; font: 11px/1 ui-monospace, Consolas, monospace; color: var(--muted);
+           font-variant-numeric: tabular-nums; }
+  .mc-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .mc-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mc-meta { font-size: 11px; color: var(--muted); }
+  .mc.empty { border-style: dashed; background: transparent; box-shadow: none; }
+  .mc.empty:hover { border-color: var(--accent); }
+  .mc.empty .mc-name { color: var(--muted); font-size: 12.5px; }
+  .mc-acts { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+             display: flex; padding-left: 12px; border-radius: 8px;
+             background: var(--card); opacity: 0; pointer-events: none; transition: opacity .12s; }
+  .mc.cur .mc-acts { background: var(--accent-soft); }
+  .mc:hover .mc-acts { opacity: 1; pointer-events: auto; }
+  .mc-acts button { padding: 3px 8px; font-size: 11px; margin: 0; border-radius: 6px; }
+  .mc-plus { position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+             color: var(--muted); font-size: 14px; opacity: 0; transition: opacity .12s; pointer-events: none; }
+  .mc.empty:hover .mc-plus { opacity: 1; color: var(--accent); }
+  .mc-acts button.danger { color: var(--bad); border-color: #cf222e66; }
+  .mc-acts button.danger:hover { background: #cf222e14; border-color: var(--bad); }
+  #meRec.on { border-color: #e06a5a; color: #e06a5a; font-weight: 600; }
+  #macroEditor input, #macroEditor textarea, #macroEditor select {
+    font: 13px inherit; padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px;
+    background: var(--card); color: var(--fg); }
+  /* range：清掉通用 input 的 padding/border，网格才对齐 */
+  #lightParams input[type=range], .lt-slider input[type=range],
+  .cp-rgb input[type=range] {
+    -webkit-appearance: auto; appearance: auto;
+    padding: 0; border: 0; background: transparent; height: 20px; width: 100%;
+    accent-color: var(--accent); }
+  /* 设置页：三栏（42 / 33 / 25），标签+控件一行，说明统一放到控件下方 */
+  .set-cols { display: flex; flex: 1; min-height: 0; }
+  .set-cols > .pcol { min-width: 0; }
+  .set-cols > .pcol + .pcol { padding-left: 24px; }
+  .set-cols > .pcol:last-child { border-left: 1px solid var(--line); }
+  .set-ph { padding: 6px 0; }
+  .set-rows { display: flex; flex-direction: column; }
+  .set-row { display: grid; grid-template-columns: 92px minmax(0, 1fr);
+             grid-template-rows: auto auto; column-gap: 10px; row-gap: 4px; align-items: center;
+             padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .set-rows .set-row:last-child { border-bottom: 0; }
+  .set-k { grid-column: 1; grid-row: 1; font-size: 13px; font-weight: 600; color: var(--fg); }
+  .set-v { grid-column: 2; grid-row: 1; display: flex; align-items: center; gap: 10px;
+           min-width: 0; flex-wrap: nowrap; }
+  .set-n { grid-column: 2; grid-row: 2; font-size: 11.5px; color: var(--muted);
+           line-height: 1.45; white-space: normal; }
+  .set-hidden { display: none; }
+  /* 备份与恢复：右侧窄栏 */
+  .bak-acts { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; }
+  .bak-acts button { width: 100%; padding: 6px 12px; font-size: 12px; margin: 0; }
+  .bak-meta { display: flex; align-items: center; gap: 6px; margin-top: 14px;
+              font-size: 11.5px; color: var(--muted); }
+  .bak-hint { margin: 8px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+  /* 分段按钮 */
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { margin: 0; border: 0; border-radius: 0; padding: 4px 11px; font-size: 12px;
+                background: var(--card); color: var(--muted); }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button:hover { color: var(--fg); }
+  .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  /* 滑杆：宽度自适应，窄栏也不会把分段按钮挤掉 */
+  .set-v > .seg, .set-v > .set-out { flex: none; }
+  .seg button { white-space: nowrap; }
+  .rng { -webkit-appearance: none; appearance: none; flex: 1 1 120px; min-width: 84px; max-width: 190px;
+         height: 4px; border-radius: 999px; background: var(--line); outline: none; }
+  .rng::-webkit-slider-thumb { -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%;
+         background: var(--accent); border: 2px solid var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.25);
+         cursor: pointer; }
+  .rng::-moz-range-thumb { width: 12px; height: 12px; border: 2px solid var(--card); border-radius: 50%;
+         background: var(--accent); cursor: pointer; }
+  .rng:disabled { opacity: .4; }
+  .set-out { font: 12px ui-monospace, Consolas, monospace; color: var(--fg); min-width: 58px; }
+  .set-row.dirty .set-k::after { content: ' ✎'; color: var(--warn); }
+  .set-row.dirty { background: #9a67000d; }
+  /* 按键指派：左编辑 / 右调色板（参考官方驱动） */
+  #kmEditor { display: flex; flex-direction: column; gap: 12px; }
+  .ed-status { font-size: 13px; }
+  .ed-type { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ed-type button { margin: 0; padding: 7px 18px; }
+  .ed-type button.on { border-color: var(--accent); color: var(--accent); font-weight: 600;
+                       background: var(--accent-soft); }
+  .ed-block { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; font-size: 13px; }
+  .ed-block label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+  .ed-label { color: var(--muted); font-size: 12px; min-width: 32px; }
+  .ed-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  #edPalette { display: flex; flex-direction: column; gap: 14px; }
+  .pal-group { }
+  .pal-group-h { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+  .pal-keys { display: flex; flex-wrap: wrap; gap: 4px 2px; }
+  .pal-key { font: 12px/1 inherit; padding: 5px 8px; border: 1px solid transparent;
+             border-radius: 6px; background: transparent; color: var(--fg); cursor: pointer;
+             margin: 0; min-width: 36px; text-align: center; }
+  .pal-key:hover { border-color: var(--line); background: var(--bg); }
+  .pal-key.on { border-color: var(--accent); color: var(--accent); font-weight: 600;
+                background: var(--accent-soft); }
+  .pal-key.mod.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  /* 未选中键位时：绑定类型 + 键位调色板置灰且不可点 */
+  #kmEditor.disabled, #edPalette.disabled { opacity: .4; pointer-events: none; }
+  /* 特殊键：危险项（恢复默认 / 2.4G对码）红框 + 连点两次确认 */
+  .pal-key.warn { color: #e06a5a; border-color: #6d2b25; }
+  .pal-key.warn:hover { border-color: #e06a5a; }
+  .pal-key.warn.confirm { background: rgba(224,106,90,.18); border-color: #e06a5a; font-weight: 600; }
+  /* 修饰/模式按钮组（ed-type 同款） */
+  #edModBtns button.on, #edMacroModeRow button.on { border-color: var(--accent); color: var(--accent);
+    font-weight: 600; background: var(--accent-soft); }
+  /* 宏选择 2×4 表格 */
+  .pal-slots { display: grid; grid-template-columns: repeat(4, minmax(104px, 1fr)); gap: 8px; max-width: 520px; }
+  .pal-slots .pal-key { width: 100%; padding: 10px 8px; border: 1px solid var(--line);
+                        border-radius: 8px; background: var(--card); }
+  .pal-slots .pal-key.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .pal-slots .pal-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pal-slots .pal-key.empty { color: var(--muted); border-style: dashed; }
+  #light .led-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  #light .led-cell { padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px;
+          cursor: pointer; background: var(--card); font-size: 13px; user-select:none; }
+  #light .led-cell:hover { border-color: var(--accent); }
+  #light .led-cell.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #light .led-cell.cur:not(.on) { border-color: var(--warn); background: #fff8c533; }
+  /* 灯效：左=模式表格铺满｜右=滑条 + 多彩按钮 + PS 风格调色盘 */
+  .lt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+  .lt-mode { display: block; width: 100%; text-align: center; margin: 0; padding: 9px 6px;
+             border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+             color: var(--fg); font-size: 12.5px; line-height: 1.3; word-break: break-all; }
+  .lt-mode:hover { border-color: var(--accent); }
+  .lt-mode.on { border-color: var(--accent); color: var(--accent); font-weight: 600;
+                background: var(--accent-soft); }
+  .lt-mode.cur:not(.on) { box-shadow: inset 0 0 0 1px var(--warn); }
+  .lt-sliders { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; max-width: 440px; }
+  .lt-slider { display: grid; grid-template-columns: 48px 1fr 28px; align-items: center;
+               gap: 12px; font-size: 13px; }
+  .lt-slider input[type=range] { padding: 0; border: 0; background: transparent; width: 100%; }
+  .lt-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  #ltMulti { min-width: 64px; }
+  #ltMulti.on { border-color: var(--accent); color: var(--accent); font-weight: 600;
+                background: var(--accent-soft); }
+  .lt-preview { display: inline-block; width: 36px; height: 22px; border-radius: 4px;
+                border: 1px solid var(--line); vertical-align: middle; }
+  .lt-preview.lt-multi { background: linear-gradient(90deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f); }
+  /* PS 风格调色盘：SV 面板 + 色相条 + RGB/Hex */
+  .cp { --sv-size: clamp(104px, 14vh, 152px);
+        display: grid; grid-template-columns: var(--sv-size) 18px minmax(210px, 1fr) 150px;
+        gap: 8px 10px; margin-top: 6px; align-items: start; }
+  .cp-tools { display: flex; flex-direction: column; gap: 8px; padding-left: 10px; align-self: stretch;
+              border-left: 1px solid var(--line); min-width: 0; }
+  .cp-tools-h { font-size: 12px; color: var(--muted); letter-spacing: .02em; }
+  .cp-multi-row { display: flex; align-items: center; gap: 8px; }
+  .cp-multi-row .lt-preview { flex: 1; width: auto; height: 22px; }
+  .cp-hint { margin-top: 2px; font-size: 11.5px; line-height: 1.5; }
+  .lt-note { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .lt-note b { color: var(--fg); font-weight: 600; }
+  .cp-sv { position: relative; width: var(--sv-size); height: var(--sv-size); border-radius: 6px;
+           cursor: crosshair; touch-action: none; background: #f00; }
+  .cp-sv-white { position: absolute; inset: 0; border-radius: 6px;
+    background: linear-gradient(to right, #fff, rgba(255,255,255,0)); pointer-events: none; }
+  .cp-sv-black { position: absolute; inset: 0; border-radius: 6px;
+    background: linear-gradient(to top, #000, rgba(0,0,0,0)); pointer-events: none; }
+  .cp-sv-dot { position: absolute; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.5); pointer-events: none;
+    transform: translate(-50%, -50%); }
+  .cp-hue { position: relative; width: 18px; height: var(--sv-size); border-radius: 6px; cursor: pointer;
+    touch-action: none;
+    background: linear-gradient(to bottom, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+  .cp-hue-dot { position: absolute; left: -2px; right: -2px; height: 6px; border-radius: 3px;
+    background: #fff; border: 1px solid rgba(0,0,0,.35); pointer-events: none;
+    transform: translateY(-50%); box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+  .cp-side { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .cp-preview { display: flex; align-items: center; gap: 8px; }
+  .cp-swatch { width: 36px; height: 28px; border-radius: 4px; border: 1px solid var(--line);
+               flex: none; }
+  .cp-hex { width: 90px; font: 12px ui-monospace, Consolas, monospace;
+            border: 1px solid var(--line); border-radius: 7px; padding: 4px 7px;
+            background: var(--card); color: var(--fg); }
+  .cp-rgb { display: grid; grid-template-columns: 14px minmax(56px, 1fr) 46px; gap: 4px 6px;
+            align-items: center; font-size: 12px; }
+  .cp-rgb input[type=number] { width: 46px; font: 12px ui-monospace, Consolas, monospace;
+                               padding: 3px 5px; text-align: right;
+                               border: 1px solid var(--line); border-radius: 6px;
+                               background: var(--card); color: var(--fg); }
+  .cp-presets { display: flex; gap: 4px; flex-wrap: wrap; }
+  .cp-preset { width: 18px; height: 18px; border-radius: 3px; border: 1px solid var(--line);
+               padding: 0; margin: 0; cursor: pointer; }
+  .cp-preset:hover { border-color: var(--fg); }
+  .cp-preset.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- ── 连接页（未连接时唯一可见界面；对齐 mchose connectDevice 布局）── -->
+<div id="landing">
+  <div class="land-wrap">
+    <div class="tips">允许浏览器连接设备</div>
+    <div class="explain" id="landStatus">点击下方按钮，在弹出的设备列表中选择并连接</div>
+    <button class="primary" id="landBtn">连接设备</button>
+    <div class="land-guide">
+      <div id="guideArt"><div class="device-box">
+        <p class="db-title">想连接到 HID 设备</p>
+        <div class="pm">
+          <div class="pm-head">设备名称</div>
+          <div class="pm-arrow a1"></div>
+          <div class="pm-badge b1"><span class="num">1</span><span>选中设备</span></div>
+          <div class="pm-arrow a2"></div>
+          <div class="pm-badge b2"><span class="num">2</span><span>点击连接</span></div>
+        </div>
+        <div class="pm-actions">
+          <div class="mock-btn cancel">取消</div>
+          <div class="mock-btn ok">连接</div>
+        </div>
+      </div></div>
+      <div class="land-list" id="landList" style="display:none"></div>
+      <div class="land-foot">找不到设备？试试重新插拔</div>
+    </div>
+    <div class="land-theme"><button id="landTheme" title="切换 浅色/深色 主题">深色</button></div>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <!-- ── 左侧边栏 ── -->
+  <aside id="sidebar">
+    <div class="brand">
+      <h1>LEOBOG ONE</h1>
+    </div>
+    <nav id="nav">
+      <button data-sec="keys" class="on">按键指派</button>
+      <button data-sec="light">键盘灯效</button>
+      <button data-sec="music">音乐律动</button>
+      <button data-sec="macro">宏编辑</button>
+      <button data-sec="settings">设置</button>
+    </nav>
+    <div class="side-foot">
+      <button id="themeBtn" title="切换 浅色/深色 主题">深色</button>
+    </div>
+  </aside>
+
+  <!-- ── 右侧主区 ── -->
+  <div id="main">
+    <div class="bar" id="topbar">
+      <button class="primary" id="connectBtn">连接键盘</button>
+      <button id="refreshBtn" disabled title="重新读取设备当前配置，复用已授权设备，不会再弹选择窗">重新读取</button>
+      <button id="applyBtn" disabled>应用修改</button>
+      <span id="applyHint" class="apply-hint" hidden></span>
+      <input type="file" id="restoreFile" accept=".json,application/json" style="display:none">
+      <span class="grow"></span>
+      <span id="status" class="muted">未连接</span>
+      <span id="psdLine" class="muted">—</span>
+      <span id="telemetry" class="muted"></span>
+    </div>
+
+    <!-- 上半：键盘（层切换绝对定位贴键盘右侧；按键指派/宏编辑/设置显示） -->
+    <div id="kbzone">
+      <div id="keyboard"><div class="muted" style="padding:30px;text-align:center">等待连接…</div></div>
+      <div id="layerTabs">
+        <button class="on" data-layer="0" title="不按 Fn 时的正常按键">默认层</button>
+        <button data-layer="1" title="按住 Fn 时的行为，F 区解释随「系统模式」变化">FN1</button>
+        <button data-layer="2" title="按住 Fn2 时的行为">FN2</button>
+        <button data-layer="3" title="Tap 层：短按触发 Tap 层，长按超过设定时间触发默认层按键">Tap</button>
+      </div>
+      <!-- 宏编辑器的 104 键选择器：覆盖在键位预览区上 -->
+      <div id="mpOverlay" style="display:none">
+        <div id="mpBar">
+          <b>选择按键</b>
+          <label><input type="radio" name="mpMode" value="pair" checked> 按下+抬起</label>
+          <label><input type="radio" name="mpMode" value="down"> 仅按下</label>
+          <label><input type="radio" name="mpMode" value="up"> 仅抬起</label>
+          <span class="muted">再点「添加按键」或按 Esc 关闭 · 方向键区上方是鼠标键</span>
+        </div>
+        <div id="mpKeys"><div id="mpKb"></div></div>
+      </div>
+    </div>
+
+    <!-- 下半：参数面板 -->
+    <div id="panel">
+      <!-- 按键指派：左=类型/修饰/宏参数｜右=键位调色板或宏列表（点选即暂存，应用修改统一写入） -->
+      <div class="pane on" id="pane-keys">
+        <div class="pcol" style="flex:1.15">
+          <div class="pcol-h">绑定类型</div>
+          <div class="pcol-body" id="kmEditor">
+            <div class="ed-status muted">编辑 <b id="edKey">—</b> · 槽 <code id="edSlot">—</code> · 当前 <code id="edCur">—</code></div>
+            <div class="ed-type" id="edTypeRow">
+              <button type="button" data-type="normal" class="on">普通键</button>
+              <button type="button" data-type="special">特殊键</button>
+              <button type="button" data-type="combo">组合键</button>
+              <button type="button" data-type="macro">宏触发</button>
+              <button type="button" data-type="default">默认键</button>
+              <button type="button" data-type="empty">空</button>
+              <select id="edType" style="display:none">
+                <option value="normal">普通键</option>
+                <option value="special">特殊键</option>
+                <option value="combo">组合键</option>
+                <option value="macro">宏触发</option>
+                <option value="default">默认键</option>
+                <option value="empty">解绑</option>
+              </select>
+            </div>
+            <div id="edMacroRow" style="display:none" class="ed-block">
+              <span class="ed-label">模式</span>
+              <div class="ed-type" id="edMacroModeRow">
+                <button type="button" data-mode="1" class="on">执行 N 次</button>
+                <button type="button" data-mode="2">循环到任意键</button>
+                <button type="button" data-mode="4">循环到松开</button>
+              </div>
+              <span id="edMacroCountRow">次数 <input type="number" id="edMacroCount" min="1" max="99" value="1" style="width:56px"></span>
+              <select id="edMacroMode" style="display:none">
+                <option value="1">执行 N 次</option>
+                <option value="2">循环到任意键</option>
+                <option value="4">循环到松开</option>
+              </select>
+              <select id="edMacroSlot" style="display:none"></select>
+            </div>
+            <div id="edModRow" class="ed-block">
+              <span class="ed-label">修饰</span>
+              <div class="ed-type" id="edModBtns">
+                <button type="button" data-modbit="1">Ctrl</button>
+                <button type="button" data-modbit="2">Shift</button>
+                <button type="button" data-modbit="4">Alt</button>
+                <button type="button" data-modbit="8">Win</button>
+              </div>
+            </div>
+            <div id="edUsageRow" style="display:none">
+              <select id="edUsage"></select>
+            </div>
+            <div class="muted" id="edHint">点上方键盘选键位，再从右侧点选绑定；暂存后点顶栏「应用修改」写入。</div>
+          </div>
+        </div>
+        <div class="pcol" style="flex:1.6">
+          <div class="pcol-h" id="edPalTitle">键位</div>
+          <div class="pcol-body" id="edPalette"></div>
+        </div>
+      </div>
+
+      <!-- 键盘灯效：左=模式表格（点选即暂存）｜右=亮度/速度/多彩/调色盘 -->
+      <div class="pane" id="pane-light">
+        <div class="pcol" style="flex:1.1">
+          <div class="pcol-h">灯效模式</div>
+          <div class="pcol-body">
+            <div id="lightModes" class="muted">连接设备后可选择灯效模式。亮度、速度与多彩按模式独立保存，修改即时暂存。</div>
+            <div id="ltNotes"></div>
+          </div>
+        </div>
+        <div class="pcol" style="flex:1.3">
+          <div class="pcol-h">灯效参数</div>
+          <div class="pcol-body">
+            <div id="lightParams" class="muted">选择左侧灯效模式后，可在此调节颜色与参数。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 音乐律动：通栏 -->
+      <div class="pane" id="pane-music">
+        <div class="pcol" style="flex:1">
+          <div class="pcol-h">音乐律动</div>
+          <div class="pcol-body">
+            <div id="music" class="bar" style="margin-bottom:0">
+              <button id="musStart" disabled>开始律动</button>
+              <button id="musStop" disabled>停止</button>
+              <button id="capStart" disabled>记录帧</button>
+              <button id="capStop" style="display:none">停止记录并下载</button>
+              <label>灵敏度 <input type="range" id="musGain" min="0.4" max="3" step="0.1" value="1" style="vertical-align:middle">
+                <span class="muted" id="musGainVal">1.0</span></label>
+              <span class="muted" id="musHint"><b>点击「开始律动」后，请选择「整个屏幕」并勾选「共享系统音频」</b>。暂不支持麦克风。
+                播放任意系统音频，键盘灯光即随节奏律动；切换窗口不会中断。</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 宏编辑：左=宏列表｜右=编辑器 -->
+      <div class="pane" id="pane-macro">
+        <div class="pcol" style="flex:1">
+          <div class="pcol-h">宏列表</div>
+          <div class="pcol-body">
+            <div id="macro" class="muted">连接后可创建、编辑宏；在「按键指派」中把任意键绑定为「宏触发」即可使用。播放模式三种。</div>
+          </div>
+        </div>
+        <div class="pcol" style="flex:2">
+          <div class="pcol-h">编辑器</div>
+          <div class="pcol-body">
+            <div id="macroEditor" style="display:none">
+              <div class="me-bar">
+                <span class="me-chip">宏 <b id="meSlot">—</b></span>
+                <input id="meName" class="me-name" maxlength="16" placeholder="宏名称" title="宏名称，会写进键盘，最多 16 字">
+                <button type="button" id="meRec" title="开始录制：直接在键盘上按，自动记录按键与间隔">● 录制</button>
+                <button type="button" id="meAddKey" title="打开 104 键盘图挑键，鼠标键在方向键区">添加按键</button>
+                <button type="button" id="meClear" title="清空这个宏的所有动作">清空</button>
+                <span class="me-grow"></span>
+                <button type="button" id="meSave" class="primary" title="写入键盘并读回校验">保存</button>
+                <button type="button" id="meCancel" title="放弃本次修改">取消</button>
+              </div>
+              <div class="me-bar me-sub">
+                <label class="me-uni" title="勾选后，把这个宏里所有动作的等待时间统一成这个值">
+                  <input type="checkbox" id="meUni"><span class="me-uni-c">✔</span>统一延时
+                  <input type="number" id="meUniMs" min="0" max="65535" value="50" style="width:62px;margin:0 3px"> ms
+                </label>
+                <span class="me-grow"></span>
+                <span class="me-info" id="meInfo"></span>
+              </div>
+              <div class="me-keys" id="meList" title="键帽之间的数字 = 这个动作结束后等待多久，单位毫秒"></div>
+            </div>
+            <div class="muted" id="macroEdHint">点击左侧的宏即可编辑；点击虚线空位即可新建。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 设置：左=参数表｜右=备份/恢复/出厂 -->
+      <div class="pane" id="pane-settings">
+        <div id="settings" class="set-cols">
+          <div class="pcol" style="flex:42">
+            <div class="pcol-h">按键与手感</div>
+            <div class="pcol-body">
+              <div class="set-rows" id="setKeys"><div class="set-ph muted">连接后自动读取当前设置。</div></div>
+            </div>
+          </div>
+          <div class="pcol" style="flex:33">
+            <div class="pcol-h">设备行为</div>
+            <div class="pcol-body"><div class="set-rows" id="setDev"></div></div>
+          </div>
+          <div class="pcol" style="flex:25">
+            <div class="pcol-h">备份与恢复</div>
+            <div class="pcol-body">
+              <div class="bak-acts">
+                <button id="backupBtn" disabled>导出备份</button>
+                <button id="restoreBtn" disabled>恢复备份…</button>
+                <button id="factoryBtn" class="danger" disabled title="写入出厂设置块 + 重建出厂键表 + 清空自定义灯色">恢复出厂</button>
+              </div>
+              <div class="bak-meta"><span>设置块</span><span id="setMagic" title="设置块状态">—</span></div>
+              <div class="bak-hint">导出后可随时写回，写入完成会读回校验。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 底部：日志（点击标题栏预览区展开/收起；展开时浮层覆盖） -->
+    <div id="logbar">
+      <div class="loghead" id="logHead" title="点击展开/收起日志">
+        <h2>日志 <span id="logLast" class="muted" style="font-weight:400;font-size:12px;margin-left:8px"></span></h2>
+        <button id="logCopy" style="padding:2px 12px;font-size:12px;display:none">复制</button>
+      </div>
+      <div id="log" class="collapsed"></div>
+    </div>
+  </div>
+</div>
+
+<script src="data/registry.js"></script>
+<script src="data/audiobar.js"></script>
+<script src="protocol.js"></script>
+<script src="fw_tables.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
