@@ -382,6 +382,7 @@ function beginApplying(opts = {}) {
     return false;
   }
   applying = true;
+  if (MUS.on || MUS.starting) stopMusic({ flush: false }); // 取消在途/排队保活后再执行配置事务
   $('app').classList.add('applying');
   updateDirtyUI();
   return true;
@@ -429,6 +430,7 @@ Leobog.onDisconnect = () => {
 function showWorkspace() {
   $('landing').style.display = 'none';
   $('app').style.display = '';
+  updatePreview();                                 // 进入工作区后再启动预览，连接页不跑隐藏动画
   fitKeyboard();
 }
 function showLanding(msg) {
@@ -755,7 +757,7 @@ async function probeKeyboard() {
 async function deviceProbe(strict) {
   const inWs = $('landing').style.display === 'none';
   if (!inWs) return;
-  const busy = connecting || recover || MUS.on || applying ||
+  const busy = connecting || recover || MUS.on || MUS.starting || applying ||
     $('refreshBtn').disabled;
   if (busy) return;
   if (!S.channel || S.channel !== 'wireless' || !Leobog.state.dev) return;
@@ -773,8 +775,8 @@ async function deviceProbe(strict) {
   }
 }
 
-// 零轮询（与官方完全一致）：休眠/唤醒检测只由 dongle 推送触发，无任何周期性探测——
-// 任何周期查询都会重置键盘空闲计时。推送形态与核验见 standingInput / probeKeyboard。
+// 普通配置态零轮询：休眠/唤醒检测由 dongle 推送触发。
+// 唯一例外：2.4G 音乐期间 0x44 只读保活；停止即撤销，不更改设备休眠设置。
 // dongle 主动推送（status: 'sleep'|'wake'|null；standingInput 已解码并打帧日志）。
 // 官方语义：推送即状态，不主动核验——
 //   sleep → 立即回选择页（recover=true，等唤醒）
@@ -803,7 +805,7 @@ function flushPendingUnsol() {
   const st = pendingUnsol;
   pendingUnsol = null;
   // 仍在忙（音乐/写入/刷新）→ 继续挂起，等下一个空闲点再补
-  if (MUS.on || applying || $('refreshBtn').disabled) return;
+  if (MUS.on || MUS.starting || applying || $('refreshBtn').disabled) return;
   // 已回到选择页：推送只影响恢复轮，无需再核验
   if ($('landing').style.display !== 'none') return;
   unsolAct(st);
@@ -816,7 +818,14 @@ Leobog.onUnsolicited = (status) => {
     return;
   }
   if (status === 'wake') return;                   // 配置页中的唤醒推送无需动作
-  if (MUS.on || applying || $('refreshBtn').disabled) {
+  if (status === 'sleep' && S.channel === 'wireless' && (MUS.on || MUS.starting)) {
+    stopMusic({ flush: false });
+    pendingUnsol = null;
+    Leobog.log('[音乐保活] 收到键盘休眠推送，保活未能阻止本次休眠；已停止律动，请保留日志', 'warn');
+    unsolAct(status);
+    return;
+  }
+  if (MUS.on || MUS.starting || applying || $('refreshBtn').disabled) {
     // 忙：挂起（后到的覆盖先到的——sleep 优先于未知；wake 在配置页已提前返回）
     if (pendingUnsol === null || status === 'sleep') pendingUnsol = status;
     return;
@@ -1183,7 +1192,7 @@ function markDirtyRows() {
 }
 
 // ── 灯效页（官方功能：左=模式表格点选即暂存｜右=亮度/速度/多彩 + PS 调色盘）──
-// 设置块： [10]=模式（KB.ini LedOpt 第 1 列 = 模型 hwId）、[58+2*(k-1)]=(速度<<4)|多彩、
+// 设置块： [10]=模式（KB.ini LedOpt 第 1 列 = 模型 hwId）、[58+2*(k-1)]=亮度、[59+2*(k-1)]=(速度<<4)|多彩、
 //          [19]=7 色索引（Fn 快捷键预设起点：红绿蓝黄紫青白 / 7=多彩，exe 0x493378 映射）
 // 参数块： 19 组×7 色，模式 k 的自定义色槽 = [21+(k-1)*21 .. +2]（常亮 [21..23]、呼吸 [42..44]、模式11 [231..233]）
 // KB.ini LedOpt 七字段 = [hw, effect, 速度, 亮度, direct, 多彩, 颜色]；color=0 的模式官方 UI
@@ -1329,6 +1338,8 @@ function lightHintText() {
   else if (sel === 10) hint += ' 预览为固件流动光点：对角折返并拖尾。';
   else if (sel === 12) hint += ' 预览按住键盘按键亮起，松开后淡出。';
   else if (sel === 15) hint += ' 预览为固件风车色环。';
+  if (!noParam && !LIGHT_FW_UNSUPPORTED.has(sel) && !romPreviewAvailable())
+    hint += ' 当前浏览器不支持 Worker，无法执行固件预览。';
   return hint;
 }
 
@@ -1601,7 +1612,7 @@ function renderLightParams() {
     return;
   }
   const { bIdx, sIdx } = lightParamIdx(sel);
-  const br = disp[bIdx], sp = disp[sIdx] >> 4;
+  const br = disp[bIdx] & 0x1f, sp = (disp[sIdx] >> 4) & 7;
   const noParam = sel === 0 || sel === 21;
   const cap = lightCap(sel);
   const colorUnknown = sel !== 21 && cap.color && !S.lightColorKnown;
@@ -1675,7 +1686,8 @@ function renderLightParams() {
       ${cap.speed ? `<label class="lt-slider">速度
         <input type="range" id="ltSpeed" min="0" max="4" step="1" value="${sp}">
         <span class="lt-val" id="ltSpeedVal">${sp}</span></label>` : ''}
-    </div>` : ''}`;
+    </div>` : ''}
+    `;
   bindColorPicker();
   renderLightNotes();          // 能力/脏标记在左栏，随参数变化刷新
 }
@@ -1746,13 +1758,13 @@ function stageLightOps() {
   const { bIdx, sIdx } = lightParamIdx(m);
   // 亮度/速度在不支持的模式下是隐藏的（不是置灰）：缺控件就以设备当前值为准
   const brEl = $('ltBright'), spEl = $('ltSpeed'), rdEl = $('ltMulti');
-  const br = brEl ? Number(brEl.value) : p[bIdx];
+  const br = brEl ? Number(brEl.value) : (p[bIdx] & 0x1f);
   const sp = spEl ? Number(spEl.value) : (p[sIdx] >> 4);
   const rd = rdEl ? rdEl.classList.contains('on') : ((p[sIdx] & 0x0f) !== 0);
   // 按模式各存一份（切模式回来仍保留该模式未应用的改动）
   S.lightOps = S.lightOps.filter(o => !((o.row === 'ltBright' || o.row === 'ltSpeed') && o.m === m));
-  if (Number.isInteger(br) && br !== p[bIdx])
-    S.lightOps.push({ key: `亮度 ${m}`, row: 'ltBright', m, fn: b => { b[bIdx] = br; } });
+  if (Number.isInteger(br) && br >= 0 && br <= 4 && br !== (p[bIdx] & 0x1f))
+    S.lightOps.push({ key: `亮度 ${m}`, row: 'ltBright', m, fn: b => { b[bIdx] = (b[bIdx] & 0xe0) | br; } });
   // 低 3 位 = 多彩标志：官方「多彩」开关整字节写 7（开）/ 0（关），不是只翻 bit0
   // （hid_p4.log 17:02 随机开关 0x47↔0x40；hid_color_wired.log w1 同为 0x47→0x40）。
   const curRd = (p[sIdx] & 0x0f) !== 0;
@@ -2248,9 +2260,95 @@ $('meList').addEventListener('input', e => {
 
 // ── 音乐律动（有线 0x08 整帧 / 无线 0x88 TLV全量快照；系统音频 → 21列频谱）──
 // 帧时钟 = AudioWorklet 音频渲染线程（后台不节流）；发送节拍 = performance.now()，零 setTimeout。
-const MUS = { on: false, ctx: null, analyser: null, stream: null, freq: null, buf: null,
+const MUS = { on: false, starting: false, session: null, ctx: null, analyser: null, stream: null, freq: null, buf: null,
               proc: null, last: 0, inflight: false, lastSend: 0, lastKeep: 0, lastChunk: 0,
-              wlFrames: null, wlIdx: 0, armed: false };
+              wlFrames: null, wlIdx: 0, armed: false, preview: null, wlPreview: null };
+const MUSIC_AWAKE_INTERVAL = 10000;
+const MUSIC_AWAKE_TIMEOUT = 300;
+
+function musicSessionCurrent(session) {
+  return !!session && MUS.session === session && !session.cancelled &&
+    Leobog.state.dev === session.device && S.channel === session.channel;
+}
+function musicSessionReady(session) {
+  return musicSessionCurrent(session) && !applying && !hasSelfTestRecovery();
+}
+function musicAwakeHint(text, warn = false) {
+  const el = $('musAwakeHint');
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text || '';
+  el.classList.toggle('warn', warn);
+}
+function musicPreviewHint() {
+  const el = $('musPreviewHint');
+  if (!el) return;
+  el.textContent = MUS.starting
+    ? '同步灯效预览：等待系统音频授权…'
+    : MUS.on
+      ? (MUS.armed ? '同步灯效预览已开启：上方键盘实时显示发送的灯光帧。' : '同步灯效预览：正在启动，等待设备预热…')
+      : '同步灯效预览：开始后，上方键盘将同步显示发送的灯光帧。';
+}
+function releaseMusicResources(session) {
+  for (const [track, fn] of session.trackEnds || []) track.removeEventListener?.('ended', fn);
+  session.trackEnds = [];
+  const { proc, stream, ctx } = session;
+  session.proc = null; session.stream = null; session.ctx = null;
+  if (proc) {
+    if (proc.port) proc.port.onmessage = null;
+    try { proc.disconnect(); } catch (e) {}
+  }
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (ctx) ctx.close().catch(() => {});
+}
+
+// 2.4G 音乐期间固定用 0x44 只读保活；0x88 心跳仅用于启动预热，不在运行中周期补发。
+// 协议层统一判定时钟截止状态。普通收片失败可恢复，只有真实未结束的发送需要停流。
+async function musicAwakeProbe(session, { warmup = false } = {}) {
+  if (!MUS.on || !musicSessionReady(session) || session.channel !== 'wireless' ||
+      session.probe || MUS.inflight || MUS.wlFrames || Leobog.ioPending) return false;
+  const settings = !warmup;
+  const command = settings ? '0x44' : '0x88';
+  const probe = { controller: new AbortController(), checkDeadline: null };
+  session.probe = probe;
+  const number = warmup ? ++session.warmupCount : ++session.probeCount;
+  const label = `[音乐保活][${command}] ${warmup ? '预热 ' : '#'}${number}`;
+  try {
+    const options = {
+      device: session.device, signal: probe.controller.signal, timeoutMs: MUSIC_AWAKE_TIMEOUT,
+      onDeadlineCheck: fn => { probe.checkDeadline = fn; },
+    };
+    const result = await (settings ? Leobog.probeMusicAwake(options) : Leobog.sendMusicHeartbeat(options));
+    if (!musicSessionCurrent(session)) return false;
+    if (warmup) return true;
+    session.probeOK++;
+    const elapsed = Math.round(result.elapsedMs);
+    Leobog.log(`${label} 应答完整 128B · ${elapsed}ms（只读，休眠档未修改）`, 'ok');
+    musicAwakeHint(`2.4G 只读保活：应答 ${session.probeOK}/${number} 次 · 最近 ${elapsed}ms · 间隔 10 秒`);
+    return true;
+  } catch (e) {
+    if (!musicSessionCurrent(session)) return false;
+    const d = e?.diagnostics;
+    const details = d
+      ? `；阶段=${d.phase}，发送=${d.sendMs == null ? '未完成' : Math.round(d.sendMs) + 'ms'}` +
+        (settings ? `，有效片=${d.receivedChunks}/10，缺片=[${(d.missingChunks || []).join(',')}]` : '')
+      : '';
+    if (e?.transportPending || e?.name === 'InvalidStateError') {
+      const reason = e.transportPending ? 'USB 发送超时且尚未结束' : '会话设备已不可用';
+      Leobog.log(`${label} ${reason}${details}；已停止律动以保持互斥，请保留日志`, 'warn');
+      stopMusic({ flush: false });
+      musicAwakeHint('音乐保活已停止：' + reason + '；休眠设置未修改', true);
+      return false;
+    }
+    Leobog.log(`${label} ${settings ? '查询' : '发送'}失败：${e?.message || e}${details}；` +
+      (warmup ? '不补发本次预热，不写配置' : '音乐继续，10 秒后再试，不写配置'), 'warn');
+    musicAwakeHint(`${command}：最近${settings ? '查询' : '心跳发送'}失败，音乐继续；请查看日志`, true);
+    return false;
+  } finally {
+    if (session.probe === probe) session.probe = null;
+    if (!warmup && musicSessionCurrent(session)) session.nextProbe = performance.now() + MUSIC_AWAKE_INTERVAL;
+  }
+}
 
 function hsl2rgb(h, s, l) {
   const a = s * Math.min(l, 1 - l);
@@ -2286,72 +2384,98 @@ function musicGain() {
 }
 
 async function startMusic() {
-  if (MUS.on) return;
+  if (MUS.on || MUS.starting) return;
   if (!canWriteConfiguration()) return;
   if (applying || Leobog.ioPending) { Leobog.log('配置读写进行中，暂不能启动音乐律动', 'warn'); return; }
-  if (!S.channel) { Leobog.log('请先连接设备', 'warn'); return; }
-  const musicDevice = Leobog.state.dev;
+  if (!S.channel || !Leobog.state.dev) { Leobog.log('请先连接设备', 'warn'); return; }
+  const session = { device: Leobog.state.dev, channel: S.channel, cancelled: false,
+    stream: null, ctx: null, proc: null, trackEnds: [], probe: null, nextProbe: 0, probeCount: 0, probeOK: 0,
+    warmupCount: 0 };
+  MUS.session = session; MUS.starting = true;
+  MUS.preview = null; MUS.wlPreview = null;
+  musicPreviewHint();
+  $('musStart').disabled = true; $('musStop').disabled = false;
+  musicAwakeHint('');
+  let started = false;
   Leobog.log('音乐律动：请求系统音频…请选择「整个屏幕」并勾选「共享系统音频」，不要选单个标签页');
   try {
-    // 只认系统音频回环：共享整个屏幕+系统音频后，切窗口/切页不断流
     const stream = await navigator.mediaDevices.getDisplayMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       video: true,
     });
-    if (applying || Leobog.ioPending || hasSelfTestRecovery() || Leobog.state.dev !== musicDevice) {
-      stream.getTracks().forEach(t => t.stop());
-      Leobog.log('音乐启动已取消：设备或配置写入状态已改变', 'warn');
+    session.stream = stream;
+    if (!musicSessionReady(session) || Leobog.ioPending) {
+      if (MUS.session === session) Leobog.log('音乐启动已取消：设备或配置写入状态已改变', 'warn');
       return;
     }
     stream.getVideoTracks().forEach(t => t.stop());
-    if (!stream.getAudioTracks().length) {
-      stream.getTracks().forEach(t => t.stop());
+    const tracks = stream.getAudioTracks();
+    if (!tracks.length || tracks.some(t => t.readyState === 'ended'))
       throw new Error('没有拿到音频——请在共享弹窗里勾选「共享/Shares system audio」，并共享整个屏幕');
+    const onEnded = () => {
+      if (MUS.session !== session) return;
+      stopMusic();
+      Leobog.log('系统音频共享已结束，音乐律动和保活均已停止', 'ok');
+    };
+    for (const track of tracks) {
+      track.addEventListener?.('ended', onEnded);
+      session.trackEnds.push([track, onEnded]);
     }
     const ctx = new AudioContext();
+    session.ctx = ctx;
     const srcNode = ctx.createMediaStreamSource(stream);
     const an = ctx.createAnalyser();
-    an.fftSize = 512;
-    an.smoothingTimeConstant = 0.6;
+    an.fftSize = 512; an.smoothingTimeConstant = 0.6;
     srcNode.connect(an);
-    // 帧时钟：AudioWorklet（音频渲染线程，后台不节流）。
-    // 单一 data: URL 加载——file:// 下 blob/相对文件都会被 Chrome 按跨源拒绝（实测），
-    // data: 是唯一在 file:// 与 http:// 下都能用的形态（headless 实测 file:// 三选一仅 data OK）。
+    // 音频线程时钟兼顾后台；data: 模块同时支持 file:// 与 localhost。
     const WL_SRC = 'class C extends AudioWorkletProcessor{process(){this.port.postMessage(1);return true}}registerProcessor("clock",C);';
     await ctx.audioWorklet.addModule('data:text/javascript;base64,' + btoa(WL_SRC));
-    if (applying || Leobog.ioPending || hasSelfTestRecovery() || Leobog.state.dev !== musicDevice) {
-      stream.getTracks().forEach(t => t.stop());
-      await ctx.close().catch(() => {});
-      Leobog.log('音乐启动已取消：设备或配置写入状态已改变', 'warn');
+    if (!musicSessionReady(session) || Leobog.ioPending || tracks.some(t => t.readyState === 'ended')) {
+      if (MUS.session === session) Leobog.log('音乐启动已取消：设备或配置写入状态已改变', 'warn');
       return;
     }
     const node = new AudioWorkletNode(ctx, 'clock', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+    session.proc = node;
     const mute = ctx.createGain(); mute.gain.value = 0;
-    node.connect(mute); mute.connect(ctx.destination);   // 保持图存活
-    node.port.onmessage = () => { if (MUS.on) musicTick(); };
-    MUS.proc = node;
-    MUS.on = true; MUS.ctx = ctx; MUS.analyser = an; MUS.stream = stream;
-    MUS.freq = new Uint8Array(an.frequencyBinCount);
-    MUS.buf = new Uint8Array(378);
+    node.connect(mute); mute.connect(ctx.destination);
+    node.port.onmessage = () => { if (MUS.session === session && MUS.on) musicTick(); };
+    MUS.proc = node; MUS.ctx = ctx; MUS.analyser = an; MUS.stream = stream;
+    MUS.on = true; MUS.starting = false;
+    MUS.freq = new Uint8Array(an.frequencyBinCount); MUS.buf = new Uint8Array(378);
     MUS.last = 0; MUS.inflight = false; MUS.lastSend = 0; MUS.lastKeep = 0; MUS.lastChunk = 0;
-    MUS.wlFrames = null; MUS.wlIdx = 0;
-    MUS.armed = S.channel !== 'wireless';              // 无线：预热 4 条心跳后才开数据流
-    $('musStart').disabled = true;
-    $('musStop').disabled = false;
-    // 无线预热：进入音乐页前打 4 条心跳（官方抓包：进入时 4 条 @31-45ms，活跃期几乎无心跳）
-    if (S.channel === 'wireless') {
-      for (let i = 0; i < 4 && MUS.on; i++) {
-        await Leobog.sendMusicPoll().catch(() => {});
+    MUS.wlFrames = null; MUS.wlIdx = 0; MUS.armed = session.channel !== 'wireless';
+    updatePreview();
+    musicPreviewHint();
+    if (session.channel === 'wireless') {
+      Leobog.log('[音乐保活] 2.4G 0x44 只读保活已启用：每 10 秒查询；普通收片超时不停止音乐；休眠设置不变', 'ok');
+      await musicAwakeProbe(session);
+      if (!musicSessionReady(session)) return;
+      // 保留原有 4 次 0x88 启动预热，使用同一设备绑定/超时/取消门禁。
+      for (let i = 0; i < 4; i++) {
+        if (!musicSessionReady(session)) return;
+        if (Leobog.ioPending) {
+          Leobog.log('音乐启动已取消：新的配置事务占用通道（保活自身事务已经收尾）', 'warn');
+          return;
+        }
+        await musicAwakeProbe(session, { warmup: true });
+        if (!musicSessionReady(session)) return;
         await new Promise(r => setTimeout(r, 33));
       }
-      MUS.armed = MUS.on;
+      if (!musicSessionReady(session)) return;
+      MUS.armed = true;
     }
-    Leobog.log(S.channel === 'wireless'
-      ? `音乐律动已开始 · 无线 0x88 全量快照 · 音频时钟驱动，后台不断流`
-      : `音乐律动已开始 · 有线 0x08 整帧约 21ms · 音频时钟驱动，后台不断流`, 'ok');
+    started = true;
+    musicPreviewHint();
+    Leobog.log(session.channel === 'wireless'
+      ? '音乐律动已开始 · 无线 0x88 全量快照 · 音频时钟驱动 · 0x44 只读保活'
+      : '音乐律动已开始 · 有线 0x08 整帧约 21ms · 音频时钟驱动；有线不启用保活', 'ok');
   } catch (e) {
-    stopMusic();
-    Leobog.log('音乐律动启动失败：' + (e.message || e), 'bad');
+    if (MUS.session === session) Leobog.log('音乐律动启动失败：' + (e.message || e), 'bad');
+  } finally {
+    if (!started) {
+      if (MUS.session === session) stopMusic();
+      else releaseMusicResources(session);
+    }
   }
 }
 
@@ -2420,10 +2544,34 @@ function encodeTlv(segs) {
   return Uint8Array.from(out);
 }
 
+// 从实际无线 TLV 还原显示帧：颜色量化/预算剔列/未列出槽熄灭均与设备一致。
+// 与自定义色帧不同，这里沿用音乐流的 interleaved RGB（slot * 3）。
+function musicFrameFromTlv(data) {
+  const frame = new Uint8Array(378);
+  for (let off = 0; off + 4 <= data.length;) {
+    const r = data[off++], g = data[off++], b = data[off++], count = data[off++];
+    for (let i = 0; i < count && off < data.length; i++) {
+      const slot = data[off++];
+      if (slot >= 126) continue;
+      frame[slot * 3] = r; frame[slot * 3 + 1] = g; frame[slot * 3 + 2] = b;
+    }
+  }
+  return frame;
+}
+
 // 音频时钟驱动的发送节拍：worklet 消息只负责"叫醒"，所有时序用 performance.now()
 // （不受页面可见性节流）——发送路径零 setTimeout，后台与前台同速
 function musicTick() {
-  if (applying || hasSelfTestRecovery()) { if (MUS.on) stopMusic(); return; }
+  if (!MUS.on) return;
+  if (applying || hasSelfTestRecovery()) { stopMusic(); return; }
+  const session = MUS.session;
+  if (!musicSessionCurrent(session)) { stopMusic(); return; }
+  // 音频时钟只推动协议的同一个截止检查，不另造错误类型。
+  if (session.probe) {
+    session.probe.checkDeadline?.();
+    return;
+  }
+  if (Leobog.ioPending) return;
   MUS.analyser.getByteFrequencyData(MUS.freq);
   renderMusicBands(MUS.freq, MUS.buf, musicGain());
   const now = performance.now();
@@ -2432,10 +2580,14 @@ function musicTick() {
     MUS.last = now;
     if (MUS.inflight) return;
     MUS.inflight = true;
-    Leobog.sendMusicFrame(MUS.buf).catch(e => {
+    const frame = MUS.buf.slice();                    // 锁定本次发送帧，后续频谱分析不能改写预览
+    Leobog.sendMusicFrame(frame).then(() => {
+      if (musicSessionReady(session)) MUS.preview = frame;
+    }).catch(e => {
+      if (!musicSessionCurrent(session)) return;
       Leobog.log('音乐流中断：' + (e.message || e), 'bad');
       stopMusic();
-    }).finally(() => { MUS.inflight = false; });
+    }).finally(() => { if (musicSessionCurrent(session)) MUS.inflight = false; });
     return;
   }
   // 无线：整屏快照周期 50ms + 周期内分片 9ms（官方 9-12ms），逐片吐给 dongle
@@ -2443,9 +2595,10 @@ function musicTick() {
   if (MUS.wlFrames) {
     if (now - MUS.lastChunk < 9) return;               // 官方片间隔
     MUS.lastChunk = now;
-    wlSendNext();
+    wlSendNext(session);
     return;
   }
+  if (now >= session.nextProbe) { musicAwakeProbe(session); return; }
   if (now - MUS.lastSend < 50) return;
   let data = musicSnapshotData(MUS.buf);
   if (!data.length) {
@@ -2454,34 +2607,58 @@ function musicTick() {
     MUS.lastKeep = now;
     data = encodeTlv([{ r: MUS.buf[0], g: MUS.buf[1], b: MUS.buf[2], slots: [0, 1, 2, 3, 4, 5] }]);
   }
+  MUS.wlPreview = musicFrameFromTlv(data);           // 快照与分片绑定，不能从下一次分析帧取色
   MUS.wlFrames = Leobog.wlChunks(0x88, Math.ceil(data.length / 14), data, 1);
   MUS.wlIdx = 0;
   MUS.lastSend = now;
   MUS.lastChunk = now;
-  wlSendNext();
+  wlSendNext(session);
 }
 
-function wlSendNext() {
+function wlSendNext(session) {
+  if (!musicSessionReady(session) || session.probe || Leobog.ioPending) return;
   const fr = MUS.wlFrames[MUS.wlIdx++];
-  if (MUS.wlIdx >= MUS.wlFrames.length) MUS.wlFrames = null;
+  const preview = MUS.wlIdx >= MUS.wlFrames.length ? MUS.wlPreview : null;
+  if (MUS.wlIdx >= MUS.wlFrames.length) { MUS.wlFrames = null; MUS.wlPreview = null; }
   MUS.inflight = true;
-  Leobog.sendMusicChunk(fr).catch(e => {
+  Leobog.sendMusicChunk(fr).then(() => {
+    // 固件收齐才整屏应用；只在最后一片发送成功后提交同一快照。
+    if (preview && musicSessionReady(session)) MUS.preview = preview;
+  }).catch(e => {
+    if (!musicSessionCurrent(session)) return;
     Leobog.log('无线律动中断：' + (e.message || e), 'bad');
     stopMusic();
-  }).finally(() => { MUS.inflight = false; });
+  }).finally(() => { if (musicSessionCurrent(session)) MUS.inflight = false; });
 }
 
-function stopMusic() {
-  if (MUS.proc) { try { MUS.proc.disconnect(); } catch (e) {} }
-  if (MUS.stream) MUS.stream.getTracks().forEach(t => t.stop());
-  if (MUS.ctx) { MUS.ctx.close().catch(() => {}); }
-  MUS.on = false; MUS.ctx = null; MUS.analyser = null; MUS.stream = null; MUS.proc = null;
+function stopMusic({ flush = true } = {}) {
+  const session = MUS.session;
+  const wasWireless = !!session && session.channel === 'wireless';
+  const resources = session || { proc: MUS.proc, stream: MUS.stream, ctx: MUS.ctx };
+  // 先让旧会话失效，再取消查询/清理资源，迟到回调不能影响下一次启动。
+  MUS.session = null; MUS.on = false; MUS.starting = false;
+  if (session) {
+    session.cancelled = true;
+    session.probe?.controller.abort();
+    session.probe = null;
+  }
+  releaseMusicResources(resources);
+  MUS.ctx = null; MUS.analyser = null; MUS.stream = null; MUS.proc = null;
   MUS.wlFrames = null; MUS.wlIdx = 0; MUS.inflight = false; MUS.armed = false;
+  MUS.preview = null; MUS.wlPreview = null;
+  updatePreview();
+  musicPreviewHint();
   const a = $('musStart'), b = $('musStop');
   if (a) a.disabled = !S.channel || applying || hasSelfTestRecovery();
   if (b) b.disabled = true;
-  flushPendingUnsol();                             // 音乐结束=空闲点：补跑忙时挂起的推送
+  if (wasWireless) {
+    musicAwakeHint('2.4G 只读保活已停止；休眠设置始终未修改');
+    Leobog.log('[音乐保活] 已停止，不再安排查询；原休眠设置未修改', 'ok');
+  }
+  if (flush) flushPendingUnsol();
 }
+// 页面退出只停止流量；没有任何需要恢复的设备配置，也不做卸载写入。
+window.addEventListener('pagehide', () => stopMusic({ flush: false }));
 
 $('musStart').onclick = startMusic;
 $('musStop').onclick = () => { stopMusic(); Leobog.log('音乐律动已停止', 'ok'); };
@@ -2607,6 +2784,7 @@ function renderKeymap(layer) {
   html += '</div>';
   $('keyboard').innerHTML = html;
   paintCustomKeys();                               // 若处于自定义上色模式，重绘后保留键色
+  updatePreview();                                 // 音乐期间重建键帽后，继续绘制已发送的快照
   fitKeyboard();
 }
 
@@ -2680,11 +2858,12 @@ window.addEventListener('resize', () => {
   window.__fitT = setTimeout(fitKeyboard, 120);
 });
 
-// 日志折叠：点击整个标题栏（含最新预览）展开/收起；展开时显示「复制」并隐藏预览
+// 日志折叠：点击整个标题栏（含最新预览）展开/收起；操作区独立，不改变录制状态
 $('logHead').onclick = e => {
-  if (e.target.closest('#logCopy,#selfTestBtn')) return; // 操作按钮不触发折叠
+  if (e.target.closest('.log-actions')) return; // 记录/下载等操作按钮不触发折叠
   const collapsed = $('log').classList.toggle('collapsed');
   $('logCopy').style.display = collapsed ? 'none' : '';
+  $('logCapture').style.display = collapsed ? 'none' : '';
   $('selfTestBtn').style.display = collapsed && !hasSelfTestRecovery() ? 'none' : '';
   $('logLast').style.display = collapsed ? '' : 'none';
 };
@@ -3196,15 +3375,17 @@ function closeEditor() {
 })();
 
 
-// ── 灯效预览引擎（网页端复刻；126 像素 = 21 列 × 6 行）────
-// 常亮/呼吸/梦幻彩虹/随波逐流/七彩瀑布/花开富贵 + 一触即发/涟漪/正弦光波按固件逐像素；
-// 其余（雨中漫步/彩虹轮盘/繁星/川流不息/如影随形/旋转风车）仍用解析式近似。
-// 模式 4/7 预览中点击按键会作为位平面种子；模式 13 自动循环补种。固件不支持的模式不预览。
-const PREVIEW = { raf: 0, last: 0, t0: 0 };
-const PV_FIXED_RAINBOW = new Set([3, 15, 16, 17]);   // 固定彩虹：不吃调色盘颜色
+// ── 灯效预览引擎（执行原厂固件）─────────────────────────────
+// 帧、相位、余辉与中断时序都来自原厂固件在 Web Worker 中的真实执行；
+// 浏览器不支持 Worker/Blob 时不预览（不提供近似替代）。
+const PREVIEW = { raf: 0, mode: '', sel: null };
+
 function previewActive() {
   return S.section === 'light' && !!S.model && S.lightSel != null &&
     S.lightSel !== 21 && S.lightSel !== 0 && !LIGHT_FW_UNSUPPORTED.has(S.lightSel);
+}
+function musicPreviewActive() {
+  return S.section === 'music' && !!S.model && MUS.on && musicSessionCurrent(MUS.session);
 }
 function previewParams() {
   const p = S.settings ? S.settings.slice() : null;
@@ -3214,714 +3395,193 @@ function previewParams() {
   const { bIdx, sIdx } = lightParamIdx(sel);
   return {
     sel,
-    bright: 0.22 + (p[bIdx] / 4) * 0.78,
-    speed: 0.35 + (p[sIdx] >> 4) * 0.35,
     color: hexToRgb(lightColor()),
     multi: (p[sIdx] & 0x0f) !== 0,
-    spd: (p[sIdx] >> 4) & 7,                     // 固件速度档 0..4（0x37DE/0x37E8/0x3801 索引）
-    level: p[bIdx],                              // 固件亮度档 0..4（0x311D）
+    spd: Math.max(0, Math.min(4, (p[sIdx] >> 4) & 7)),
+    level: Math.max(0, Math.min(4, p[bIdx] & 0x1f)),
+    forward: sel !== 17 && (p[bIdx] & 0x80) !== 0, // 普通逐模式路径：亮度字节 bit7 → RAM24.3
   };
 }
-function pvHue(h) { const [r, g, b] = hsvToRgb(((h % 360) + 360) % 360, 1, 1); return [r, g, b]; }
-function pvScale(rgb, k) { return [rgb[0] * k, rgb[1] * k, rgb[2] * k]; }
-function pvHash(a, b) { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); }
-
-// 物理坐标：按键 rect 归一化到 0..1（x 左→右，y 上→下），用于横向/纵向/径向效果
-const PV_GEO = { key: '', map: null };
-function pvGeo() {
-  if (!S.model) return null;
-  if (PV_GEO.key === S.modelName && PV_GEO.map) return PV_GEO.map;
-  const ks = S.model.keys || [];
-  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
-  for (const k of ks) {
-    const r = k.rect || [0, 0, 0, 0];
-    x0 = Math.min(x0, r[0]); x1 = Math.max(x1, r[2]);
-    y0 = Math.min(y0, r[1]); y1 = Math.max(y1, r[3]);
-  }
-  const sx = Math.max(1, x1 - x0), sy = Math.max(1, y1 - y0);
-  const map = new Map();
-  for (const k of ks) {
-    const r = k.rect || [0, 0, 0, 0];
-    map.set(k.slot, [((r[0] + r[2]) / 2 - x0) / sx, ((r[1] + r[3]) / 2 - y0) / sy]);
-  }
-  PV_GEO.key = S.modelName; PV_GEO.map = map;
-  return map;
-}
-
-
-// ── 固件灯效渲染（0x7471 = 常亮 / 花开富贵，已按固件逐像素还原）──────────
-// 0x313A 前 9 行 = 9 个径向环：desc 低 3 位 = 行、高 5 位 = 列，
-// 经 0x36CE/0x374C 换算成 (col,row) → 槽 col*6+row（= 0x0152 的 col*18+row*3）。
-// 0x7471 每环把相位 +0x0D(13) 后重算颜色：0x330B[相位]（192 项色环），
-// 基相 [EE3] 在模式 1 恒为 0（0x747B 跳过 0xA317）→ 常亮是静态径向彩虹；
-// 花开富贵每帧由 0xA317 反向 -2 步进 [08BF] → 彩虹环缓慢旋转。
-let FW_RING = null;
-function fwRingMap() {
-  const T = window.FW_TABLES;
-  if (!T) return null;
-  if (FW_RING) return FW_RING;
-  const ring = new Int8Array(126).fill(-1);
-  for (let r = 0; r < 9; r++) {
-    for (let i = 0; i < 13; i++) {
-      const d = T.descriptor_313A[r][i];
-      if (d === 0xFF) continue;
-      const c = d & 7, p = (d >> 3) & 0x1F;
-      const col = (T.ramp_36CE[c] || [])[p];
-      const row = (T.ramp_374C[c] || [])[p];
-      if (col == null || row == null || col > 20 || row > 5) continue;
-      ring[col * 6 + row] = r;
-    }
-  }
-  FW_RING = ring;
-  return ring;
-}
-function fwGrad(phase) {
-  const T = window.FW_TABLES;
-  return T.gradient_330B[((phase % 192) + 192) % 192];
-}
-// base = 基相 [EE3]（0..191）
-function fwFrame(sel, base, p) {
-  const T = window.FW_TABLES;
-  const frame = new Array(126).fill(null);
-  const ring = fwRingMap();
-  if (!T || !ring) return frame;
-  const multi = sel === 17 ? true : !!p.multi;   // 花开富贵固定彩虹（官方 UI 不吃调色盘）
-  const lvl = Math.max(0, Math.min(4, (p.level == null ? 4 : p.level) | 0));
-  const gain = T.bright_311D[lvl] / 80;         // 0x311D 五档 0/20/40/60/80，÷0x50
-  for (let slot = 0; slot < 126; slot++) {
-    const r = ring[slot];
-    if (r < 0) continue;
-    const src = multi ? fwGrad(base + 13 * r) : p.color;  // 多彩 0x330B / 单色调色盘
-    frame[slot] = [src[0] * gain, src[1] * gain, src[2] * gain];
-  }
-  return frame;
-}
-
-// ── 模式 2 呼吸：15 列固定色相（0x330B[11*col]，固件 idx==7 路径把 R/B 对调）
-//    + 0xC480[0..0x7F] 三角波整体呼吸（A317 反向 1/帧，limit 0x80）──
-function fwBreathFrame(breathPhase, p) {
-  const T = window.FW_TABLES;
-  const frame = new Array(126).fill(null);
-  if (!T) return frame;
-  const lvl = Math.max(0, Math.min(4, (p.level == null ? 4 : p.level) | 0));
-  const gain = T.bright_311D[lvl] / 80;
-  const k = gain * (T.breath_C480[((breathPhase % 128) + 128) % 128] / 255);
-  for (let c = 0; c < 15; c++) {
-    const g = T.gradient_330B[(11 * c) % 192];
-    const rgb = p.multi ? [g[2], g[1], g[0]] : p.color;   // 0x330B 的 R/B 对调
-    for (let r = 0; r < 6; r++) {
-      if (T.mask_C500[c * 6 + r] === 0xFF) continue;      // 0xC500：0xFF = 无灯位
-      const col = T.ramp_36CE[r][c];                      // 行 5 有列置换
-      const row = T.ramp_374C[r][c];
-      if (col > 20 || row > 5) continue;
-      frame[col * 6 + row] = [rgb[0] * k, rgb[1] * k, rgb[2] * k];
-    }
-  }
-  return frame;
-}
-
-// ── 模式 3 梦幻彩虹：全键同色，0x330B[[08BF]] 每帧 -1 循环（A317 limit 0xC0）
-//    像素集来自 0xC500（值 = col<<3 | row，行 4 有错位映射）──
-function fwHueCycleFrame(phase, p) {
-  const T = window.FW_TABLES;
-  const frame = new Array(126).fill(null);
-  if (!T) return frame;
-  const lvl = Math.max(0, Math.min(4, (p.level == null ? 4 : p.level) | 0));
-  const gain = T.bright_311D[lvl] / 80;
-  const g = T.gradient_330B[((phase % 192) + 192) % 192];
-  const rgb = p.multi ? g : p.color;        // 固件 idx!=7 → 调色盘静态单色
-  for (let i = 0; i < 90; i++) {
-    const d = T.mask_C500[i];
-    if (d === 0xFF) continue;
-    const col = (d >> 3) & 0x1F, row = d & 7;
-    if (col > 20 || row > 5) continue;
-    frame[col * 6 + row] = [rgb[0] * gain, rgb[1] * gain, rgb[2] * gain];
-  }
-  return frame;
-}
-
-// ── 模式 16 七彩瀑布：6 行各一色（0x330B[[EE1]]，每行 +0x19），整帧滚动 ──
-//    像素集来自 0xC500（col<<3|row，行 4 错位），每行独立色相
-function fwWaterfallFrame(base, p) {
-  const T = window.FW_TABLES;
-  const frame = new Array(126).fill(null);
-  if (!T) return frame;
-  const lvl = Math.max(0, Math.min(4, (p.level == null ? 4 : p.level) | 0));
-  const gain = T.bright_311D[lvl] / 80;
-  for (let r = 0; r < 6; r++) {
-    const g = T.gradient_330B[((base + 25 * r) % 192 + 192) % 192];
-    for (let c = 0; c < 15; c++) {
-      const d = T.mask_C500[c * 6 + r];
-      if (d === 0xFF) continue;
-      const col = (d >> 3) & 0x1F, row = d & 7;
-      if (col > 20 || row > 5) continue;
-      frame[col * 6 + row] = [g[0] * gain, g[1] * gain, g[2] * gain];
-    }
-  }
-  return frame;
-}
-
-// ── 模式 11 随波逐流：15 列各一色（0x330B，每列 +7）；单色走 0x31AF 列亮度波（每列 +10，wrap 0x60）──
-function fwWaveFrame(base, p) {
-  const T = window.FW_TABLES;
-  const frame = new Array(126).fill(null);
-  if (!T) return frame;
-  const lvl = Math.max(0, Math.min(4, (p.level == null ? 4 : p.level) | 0));
-  const gain = T.bright_311D[lvl] / 80;
-  for (let c = 0; c < 15; c++) {
-    let rgb, k = gain;
-    if (p.multi) {
-      rgb = T.gradient_330B[(((base + 7 * c) % 192) + 192) % 192];
-    } else {
-      rgb = p.color;
-      k *= T.curve_31AF[(((base + 10 * c) % 96) + 96) % 96] / 255;   // A098 呼吸曲线（96 项）
-    }
-    for (let r = 0; r < 6; r++) {
-      const col = T.ramp_36CE[r][c], row = T.ramp_374C[r][c];
-      if (col > 20 || row > 5) continue;
-      frame[col * 6 + row] = [rgb[0] * k, rgb[1] * k, rgb[2] * k];
-    }
-  }
-  return frame;
-}
-
-// ── 模式 4/7/13：共用 0x5968 位平面引擎 ─────────────────────────────────
-// 四组 15 字节列掩码：A=0x0001 / B=0x013B / C=0x02E8 / D=0x08C2，bit=行(0..5)。
-// 0x5968 每帧把四组按列 OR：列 c 行 r 命中 → 经 0x36CE/0x374C 换成物理 (col,row)
-// → 0x5114(R3=1) 写第二帧缓冲 0x0424、拖尾因子 0x0017=0x20、立即显示 0x0152。
-// 0x5A6C 帧末演化掩码：A 右移一列(补 0)、B 左移一列(补 0)、C<<=1、D>>=1，
-// 再把 C|D 并进 A/B —— 一套无回绕的对角波扩散。
-// 0x64A9 按 [0979] 阈值衰减：用 0x0424 原色×因子/32 重算显示；因子 -1（模式 13 为 -2）。
-// 时间基准：4/5/7/8/10/12 = 5ms/tick，6/15 = 10ms，13 = 3ms（网页观感标定）。
-// 种子：模式 4 = 键位 A+B（只横向扩散）；模式 7 = A+B+C+D（二维涟漪）；
-// 模式 13 = 进入时种 (6,0)，之后每 5 次 CA 在 (6,0)/(6,5) 交替补种（0x5B83），形成连续正弦波；
-// 3ms/tick 下 64A9 每 6ms 减 1，因子 32→0 约 192ms 拖影（覆盖 55 tick 帧间隔）。
-// 速度 → 帧间隔来自 0x37DE/0x37E8/0x3801（[08B7]:[08B8]，单位 tick）。
-const FW_TRIG_F0 = 0x20;            // 0x0017 初值 32 = 满亮度
-// 逐模式 tick（网页观感标定）：4/5/7/8/10/12 = 5ms；6/15 = 10ms；13 = 3ms。
-// 旧模式 2/3/11/16/17 走 previewTick 里的 n = t*30*p.speed 时钟，不经过这里。
-// 需要单独调某个模式时可在这里加覆盖，例如 { 6: 21 }。
-const FW_TICK_MS = { 6: 10, 15: 10, 13: 3 };   // 轮盘/风车 10ms；正弦光波 3ms，拖影约 96ms
-const FW_TICK_DEFAULT = 5;
-function fwTickMs(sel) { return FW_TICK_MS[sel] || FW_TICK_DEFAULT; }
-let FW_TRIG = null;
-function fwTrigNew(sel) {
-  return {
-    sel,
-    A: new Uint8Array(15), B: new Uint8Array(15),
-    C: new Uint8Array(15), D: new Uint8Array(15),
-    rgb: new Float32Array(126 * 3),   // 0x0424 第二帧缓冲（原始色）
-    fac: new Uint8Array(126),         // 0x0017 拖尾因子
-    disp: new Float32Array(126 * 3),  // 当前显示值
-    peak: new Float32Array(126 * 3),  // 本渲染窗口内的峰值（避免 21ms 渲染错过 1ms 快闪）
-    tick: 0, acc: 0, lastFrame: 0, lastDecay: 0,
-    caCount: 0, seedPhase: 0,        // 模式 13：0x08BA / RAM24.7
-  };
-}
-function fwTrigSeed(st, c, r, all) {
-  if (c < 0 || c > 14 || r < 0 || r > 5) return;
-  const bit = 1 << r;
-  st.A[c] |= bit; st.B[c] |= bit;      // 0x18E8 → 0x013B / 0x0001
-  if (all) { st.C[c] |= bit; st.D[c] |= bit; }   // 0x186C 额外种 0x02E8 / 0x08C2
-}
-function fwTrigReset(sel) {
-  FW_TRIG = fwTrigNew(sel);
-  if (sel === 13) fwTrigSeed(FW_TRIG, 6, 0, true);  // 0xA7D1：清空后种中列顶行
-  return FW_TRIG;
-}
-// 按键 → C500[槽] 给出逻辑 (c,r)（行 4 含列置换），模式 4/7 的 0x1806/0x186C
-function fwTrigKey(sel, slot) {
-  const T = window.FW_TABLES;
-  if (!T || (sel !== 4 && sel !== 7)) return;
-  if (!FW_TRIG || FW_TRIG.sel !== sel) fwTrigReset(sel);
-  const d = T.mask_C500[slot];
-  if (d == null || d === 0xFF) return;
-  const r = d & 7, c = (d >> 3) & 0x1f;
-  if (c > 14 || r > 5) return;
-  fwTrigSeed(FW_TRIG, c, r, sel === 7);
-}
-// 通用拖尾层：0x0424 原色 × 0x0017/32（不回写），held 位=1 的像素跳过（0x0CFC）
-function fwTrailDecay(st, p, step, held) {
-  const T = window.FW_TABLES;
-  const gain = T.bright_311D[Math.max(0, Math.min(4, p.level | 0))] / 80;
-  for (let r = 0; r < 6; r++) {
-    for (let c = 0; c < 15; c++) {
-      const col = T.ramp_36CE[r][c], row = T.ramp_374C[r][c];
-      if (col > 20 || row > 5) continue;
-      const slot = col * 6 + row, o = slot * 3, k = st.fac[slot];
-      if (held && held[slot]) continue;            // 0x64A9 的 0x0CFC 跳过
-      if (!k) {
-        st.disp[o] = st.disp[o + 1] = st.disp[o + 2] = 0;
-        continue;
-      }
-      const f = (k / FW_TRIG_F0) * gain;
-      for (let ch = 0; ch < 3; ch++) st.disp[o + ch] = st.rgb[o + ch] * f;
-      st.fac[slot] = k > step ? k - step : 0;
-    }
-  }
-}
-// 0x5114 R3=1：写一帧特效色 + 0x0017=0x20 + 立即显示
-function fwBufPut(st, slot, p, fac) {
-  const T = window.FW_TABLES;
-  const gain = T.bright_311D[Math.max(0, Math.min(4, p.level | 0))] / 80;
-  const src = p.multi ? T.gradient_330B[(Math.random() * 192) | 0] : p.color;
-  const o = slot * 3;
-  for (let ch = 0; ch < 3; ch++) {
-    st.rgb[o + ch] = src[ch];
-    st.disp[o + ch] = src[ch] * gain;
-  }
-  st.fac[slot] = fac;
-}
-// 模式 13 固件步进是 2（16 次就黑），但帧间隔有 55 tick；网页用步进 1（32 次）
-// 让余晖覆盖到下一帧，避免“一亮一灭”。其余模式仍按固件步进。
-function fwTrigDecay(st, p) { fwTrailDecay(st, p, 1, null); }
-// 0x5968：本帧所有命中像素写 0x0424 + 0x0017=32 + 显示
-function fwTrigEngine(st, p) {
-  const T = window.FW_TABLES;
-  for (let c = 0; c < 15; c++) {
-    const m = (st.A[c] | st.B[c] | st.C[c] | st.D[c]) & 0x3f;
-    if (!m) continue;
-    for (let r = 0; r < 6; r++) {
-      if (!((m >> r) & 1)) continue;
-      const col = T.ramp_36CE[r][c], row = T.ramp_374C[r][c];
-      if (col > 20 || row > 5) continue;
-      fwBufPut(st, col * 6 + row, p, FW_TRIG_F0);
-    }
-  }
-}
-// 0x5A6C：A 右移一列（A[0] 清 0）、B 左移一列（B[14] 清 0）、C<<=1、D>>=1，再并入 C|D
-function fwTrigStep(st) {
-  const A = st.A, B = st.B, C = st.C, D = st.D;
-  const A2 = new Uint8Array(15), B2 = new Uint8Array(15);
-  const C2 = new Uint8Array(15), D2 = new Uint8Array(15);
-  for (let c = 0; c < 15; c++) {
-    C2[c] = (C[c] << 1) & 0xff;
-    D2[c] = D[c] >> 1;
-  }
-  for (let c = 1; c < 15; c++) A2[c] = A[c - 1];   // 0x0001：A 右移
-  for (let c = 0; c < 14; c++) B2[c] = B[c + 1];   // 0x013B：B 左移
-  for (let c = 0; c < 15; c++) {
-    const m = C2[c] | D2[c];
-    A2[c] |= m; B2[c] |= m;
-  }
-  st.A = A2; st.B = B2; st.C = C2; st.D = D2;
-}
-function fwTrigFrame(p, dtMs) {
-  const T = window.FW_TABLES;
-  if (!T) return null;
-  if (!FW_TRIG || FW_TRIG.sel !== p.sel) fwTrigReset(p.sel);
-  const st = FW_TRIG;
-  st.acc += Math.max(0, Math.min(120, dtMs || 0));
-  const tickMs = fwTickMs(st.sel);
-  let ticks = Math.floor(st.acc / tickMs);
-  st.acc -= ticks * tickMs;
-  const spd = Math.max(0, Math.min(4, p.spd | 0));
-  const fi = (T.trig_interval[String(p.sel)] || [40])[spd] || 40;
-  const dec = (T.trig_decay[String(p.sel)] || 15);
-  for (let i = 0; i < ticks; i++) {
-    st.tick++;
-    if (st.tick - st.lastDecay >= dec) { st.lastDecay = st.tick; fwTrigDecay(st, p); }
-    if (st.tick - st.lastFrame >= fi) {
-      st.lastFrame = st.tick;
-      fwTrigEngine(st, p);
-      fwTrigStep(st);
-      if (p.sel === 13) {
-        st.caCount++;
-        if (st.caCount >= 5) {                 // 0x5B83：每 5 次 CA
-          st.caCount = 0;
-          fwTrigSeed(st, 6, st.seedPhase ? 5 : 0, true);  // 0/5 行交替补种
-          st.seedPhase = st.seedPhase ? 0 : 1;
-        }
-      }
-    }
-    for (let o = 0; o < 378; o++) if (st.disp[o] > st.peak[o]) st.peak[o] = st.disp[o];
-  }
-  const out = new Array(126).fill(null);
-  for (let slot = 0; slot < 126; slot++) {
-    const o = slot * 3;
-    const r = st.peak[o], g = st.peak[o + 1], b = st.peak[o + 2];
-    if (r > 0.5 || g > 0.5 || b > 0.5) out[slot] = [r, g, b];
-    st.peak[o] = st.peak[o + 1] = st.peak[o + 2] = 0;
-  }
-  return out;
-}
-
-
-// ── 模式 5/6/8/10/12/15：0x0424 拖尾层或逐像素相位 ─────────────────────
-// 5 雨中漫步：0x0E23 每列雨滴行号，每帧随机一列起雨、逐行下落（0x9A4C）
-// 6 彩虹轮盘：0x0017 逐像素相位（初相 0x320F/0x328D），每帧 -1（0x6081）
-// 8 繁星点点：0x5E48 随机造星，0x629E 每 15 tick 按 age/32 明灭（0xAB9B）
-// 10 川流不息：单光点在 15×6 网格对角折返，64A9 拖尾（0x8A06）
-// 12 如影随形：按键写色，0x0CFC 按住位跳过衰减，松开后淡出（0x64A9）
-// 15 旋转风车：0x0017 相位（初相 0x9F0D），每帧 -1，0x354E 128 色环（0x7E94）
-let FW_EXTRA = null;
-const FW_EXTRA_HELD = new Set();
-function fwGain(p) {
-  const T = window.FW_TABLES;
-  return T.bright_311D[Math.max(0, Math.min(4, p.level | 0))] / 80;
-}
-function fwSlot(c, r) {
-  const T = window.FW_TABLES;
-  if (c < 0 || c > 14 || r < 0 || r > 5) return -1;
-  const col = T.ramp_36CE[r][c], row = T.ramp_374C[r][c];
-  return (col > 20 || row > 5) ? -1 : col * 6 + row;
-}
-function fwExtraNew(sel) {
-  const st = {
-    sel, tick: 0, acc: 0, lastFrame: 0, lastDecay: 0, lastAge: 0, out: null,
-    rgb: new Float32Array(126 * 3), fac: new Uint8Array(126), disp: new Float32Array(126 * 3),
-  };
-  if (sel === 5) st.cols = new Uint8Array(15).fill(0xFF);
-  if (sel === 6 || sel === 15) { st.ph = new Uint8Array(126); st.phaseKey = ""; }
-  if (sel === 8) { st.held = new Uint8Array(126); st.age = new Uint8Array(126); }
-  if (sel === 10) { st.row = 0; st.col = 0; st.dir = 0; st.hdir = 0; }
-  if (sel === 12) st.held = new Uint8Array(126);
-  return st;
-}
-function fwExtraInitPhase(st, p) {
-  const T = window.FW_TABLES;
-  if (p.sel === 6) {
-    const src = p.multi ? T.phase6_320F : T.phase6_328D;
-    for (let i = 0; i < 126; i++) st.ph[i] = src[i] || 0;
-    st.phaseKey = p.multi ? "m" : "s";
-  } else if (p.sel === 15) {
-    for (let i = 0; i < 126; i++) st.ph[i] = T.phase15_9F0D[i] || 0;
-    st.phaseKey = "15";
-  }
-}
-function fwExtraReset(sel, p) {
-  FW_EXTRA = fwExtraNew(sel);
-  if (sel === 6 || sel === 15) fwExtraInitPhase(FW_EXTRA, p);
-  return FW_EXTRA;
-}
-function fwExtraEnsure(p) {
-  if (!FW_EXTRA || FW_EXTRA.sel !== p.sel) return fwExtraReset(p.sel, p);
-  if (p.sel === 6) {
-    const key = p.multi ? "m" : "s";
-    if (FW_EXTRA.phaseKey !== key) fwExtraInitPhase(FW_EXTRA, p);
-  }
-  return FW_EXTRA;
-}
-// 0x9A4C：随机一列起雨（状态 0xFF → 0），逐列下落；状态 ≥6 置 0xFF
-function fwRainEngine(st, p) {
-  const c0 = (Math.random() * 15) | 0;
-  if (st.cols[c0] === 0xFF) st.cols[c0] = 0;
-  for (let c = 0; c < 15; c++) {
-    const s = st.cols[c];
-    if (s >= 6) { st.cols[c] = 0xFF; continue; }
-    const slot = fwSlot(c, s);
-    if (slot >= 0) fwBufPut(st, slot, p, FW_TRIG_F0);
-    st.cols[c] = s + 1;
-  }
-}
-// 0x8A06：画当前点，再按 0x0E/0xFF 边界折返
-function fwFlowEngine(st, p) {
-  const slot = fwSlot(st.col, st.row);
-  if (slot >= 0) fwBufPut(st, slot, p, FW_TRIG_F0);
-  if (st.dir !== 0) {
-    st.col = (st.col + 1) & 0xff;
-    if (st.col >= 14) { st.dir = 0; st.col = 14; st.row = (st.row + (st.hdir ? 1 : -1)) & 0xff; }
-  } else {
-    st.col = (st.col - 1) & 0xff;
-    if (st.col >= 14) { st.dir = 0xff; st.col = 0; st.row = (st.row + (st.hdir ? 1 : -1)) & 0xff; }
-  }
-  if (st.row < 5) { /* 0..4 保持 */ }
-  else if (st.row !== 0xff) { st.hdir ^= 0xff; st.row = 4; }
-  else { st.hdir ^= 0xff; st.row = 1; }
-}
-// 0x5E48：每次最多造 5 颗星（0x36CE/0x374C 平坦索引 0..125）
-function fwStarSpawn(st, p) {
-  const T = window.FW_TABLES;
-  for (let i = 0; i < 5; i++) {
-    const idx = (Math.random() * 0x84) | 0;          // 固件 A8CB % 0x84（0..131）
-    const rr = (idx / 21) | 0, cc = idx % 21;
-    const col = T.ramp_36CE[rr][cc], row = T.ramp_374C[rr][cc];
-    if (col >= 15 || row > 5) continue;
-    const slot = col * 6 + row;
-    if (st.held[slot] || st.age[slot]) continue;
-    const src = p.multi ? T.gradient_330B[(Math.random() * 192) | 0] : p.color;
-    const o = slot * 3;
-    for (let ch = 0; ch < 3; ch++) st.rgb[o + ch] = src[ch];
-    st.age[slot] = 0;
-    st.held[slot] = 1;
-  }
-}
-// 0x629E：age/32 显示；按住时 age++（到 32 清 0x0CFC），松开后 age--
-function fwStarAge(st, p) {
-  const gain = fwGain(p);
-  for (let c = 0; c < 15; c++) {
-    for (let r = 0; r < 6; r++) {
-      const slot = fwSlot(c, r);
-      if (slot < 0) continue;
-      const o = slot * 3, a = st.age[slot], f = (a / 32) * gain;
-      for (let ch = 0; ch < 3; ch++) st.disp[o + ch] = st.rgb[o + ch] * f;
-      if (st.held[slot]) {
-        let n = a + 1;
-        if (n >= 32) { n = 32; st.held[slot] = 0; }
-        st.age[slot] = n;
-      } else if (a > 0) st.age[slot] = a - 1;
-    }
-  }
-}
-// 0x6081：逐像素相位 -1，wrap 0xC0（多彩）/0x60（单色）
-function fwWheelEngine(st, p) {
-  const T = window.FW_TABLES, gain = fwGain(p);
-  const lim = p.multi ? 0xC0 : 0x60;
-  const out = new Array(126).fill(null);
-  for (let c = 0; c < 15; c++) {
-    for (let r = 0; r < 6; r++) {
-      const i = c * 6 + r;
-      let k = st.ph[i];
-      k = (k === 0) ? lim - 1 : k - 1;
-      st.ph[i] = k;
-      const slot = fwSlot(c, r);
-      if (slot < 0) continue;
-      let src, kk = gain;
-      if (p.multi) src = T.gradient_330B[k];
-      else { src = p.color; kk *= (T.curve_31AF[k] || 0) / 255; }
-      out[slot] = [src[0] * kk, src[1] * kk, src[2] * kk];
-    }
-  }
-  return out;
-}
-// 0x7E94：逐像素相位 -1，wrap 0x80，查 0x354E 色环
-function fwWindmillEngine(st, p) {
-  const T = window.FW_TABLES, gain = fwGain(p);
-  const out = new Array(126).fill(null);
-  for (let c = 0; c < 15; c++) {
-    for (let r = 0; r < 6; r++) {
-      const i = c * 6 + r;
-      let k = st.ph[i];
-      k = (k === 0) ? 0x7F : k - 1;
-      st.ph[i] = k;
-      const slot = fwSlot(c, r);
-      if (slot < 0) continue;
-      const src = T.wheel_354E[k];
-      out[slot] = [src[0] * gain, src[1] * gain, src[2] * gain];
-    }
-  }
-  return out;
-}
-function fwDispOut(st) {
-  const out = new Array(126).fill(null);
-  for (let slot = 0; slot < 126; slot++) {
-    const o = slot * 3;
-    const r = st.disp[o], g = st.disp[o + 1], b = st.disp[o + 2];
-    if (r > 0.5 || g > 0.5 || b > 0.5) out[slot] = [r, g, b];
-  }
-  return out;
-}
-function fwExtraFrame(p, dtMs) {
-  const T = window.FW_TABLES;
-  if (!T) return null;
-  const st = fwExtraEnsure(p);
-  st.acc += Math.max(0, Math.min(120, dtMs || 0));
-  const tickMs = fwTickMs(st.sel);
-  let ticks = Math.floor(st.acc / tickMs);
-  st.acc -= ticks * tickMs;
-  const spd = Math.max(0, Math.min(4, p.spd | 0));
-  const fi = (T.trig_interval[String(p.sel)] || [40])[spd] || 40;
-  const dec = (T.trig_decay[String(p.sel)] || 15);
-  for (let i = 0; i < ticks; i++) {
-    st.tick++;
-    if (p.sel === 5 || p.sel === 10) {
-      if (st.tick - st.lastDecay >= dec) { st.lastDecay = st.tick; fwTrailDecay(st, p, 1, null); }
-      if (st.tick - st.lastFrame >= fi) {
-        st.lastFrame = st.tick;
-        if (p.sel === 5) fwRainEngine(st, p); else fwFlowEngine(st, p);
-      }
-    } else if (p.sel === 12) {
-      if (st.tick - st.lastFrame >= fi) { st.lastFrame = st.tick; fwTrailDecay(st, p, 1, st.held); }
-    } else if (p.sel === 8) {
-      if (st.tick - st.lastAge >= 15) { st.lastAge = st.tick; fwStarAge(st, p); }
-      if (st.tick - st.lastFrame >= fi) { st.lastFrame = st.tick; fwStarSpawn(st, p); }
-    } else if (p.sel === 6 || p.sel === 15) {
-      if (st.tick - st.lastFrame >= fi) {
-        st.lastFrame = st.tick;
-        st.out = (p.sel === 6) ? fwWheelEngine(st, p) : fwWindmillEngine(st, p);
-      }
-    }
-  }
-  if (p.sel === 6 || p.sel === 15) return st.out || new Array(126).fill(null);
-  return fwDispOut(st);
-}
-function fwExtraPress(sel, slot) {
-  if (sel !== 12) return;
-  const p = previewParams();
-  if (!p) return;
-  const st = fwExtraEnsure(p);
-  st.held[slot] = 1;
-  fwBufPut(st, slot, p, FW_TRIG_F0);
-  FW_EXTRA_HELD.add(slot);
-}
-function fwExtraRelease(sel, slot) {
-  if (sel !== 12) return;
-  const st = FW_EXTRA;
-  if (st && st.sel === 12) st.held[slot] = 0;
-  FW_EXTRA_HELD.delete(slot);
-}
-// 按键触发类效果的事件（点击键盘记录：位置/时间/随机色相）
-const PV_EVT = [];
-function pvOnKeyClick(slot, nx, ny) {
-  PV_EVT.push({ slot, nx, ny, t0: (performance.now() - PREVIEW.t0) / 1000, hue: Math.random() * 360 });
-  while (PV_EVT.length > 16) PV_EVT.shift();
-}
-function pvLastEvt(t, maxAge) {
-  let best = null;
-  for (const e of PV_EVT) {
-    const age = t - e.t0;
-    if (age >= 0 && age < maxAge && (!best || age < best.age)) best = { e, age };
-  }
-  return best;
-}
-function pvColor(sel, slot, nx, ny, t, p) {
-  const sp = p.speed, br = p.bright;
-  const mix = (shape, huePhase) => pvScale(p.multi ? pvHue(huePhase) : p.color, br * shape);
-  const fixed = (huePhase) => pvScale(pvHue(huePhase), br);
-  const cx = 0.5, cy = 0.55;                       // 键盘几何中心（约在 G/H 之间）
-  const dist = Math.hypot(nx - cx, ny - cy);
-  if (sel === 1) {                                 // 常亮：中心红→橙黄绿青蓝向外扩（静态径向彩虹）
-    return mix(1, Math.min(1, dist / 0.62) * 235);
-  }
-  if (sel === 2) {                                 // 呼吸：左蓝→右紫 + 整体呼吸
-    const k = 0.28 + 0.72 * (0.5 + 0.5 * Math.sin(t * 1.2 * sp));
-    return mix(k, 238 + nx * 52);
-  }
-  if (sel === 3) return fixed(nx * 300 + t * 45 * sp);            // 梦幻彩虹：彩虹轮换（会动）
-  if (sel === 4) {                                 // 一触即发：从按下的那一列向两侧扩散随机色
-    const ev = pvLastEvt(t, 2.4);
-    if (!ev) return [0, 0, 0];
-    const r = ev.age * 0.85 * sp;
-    const band = Math.max(0, 1 - Math.abs(Math.abs(nx - ev.e.nx) - r) / 0.18);
-    if (!band) return [0, 0, 0];
-    return pvScale(p.multi ? pvHue(pvHash(nx * 9, ny * 7) * 360) : p.color, br * band);
-  }
-  if (sel === 5) {                                 // 雨中漫步：一列列彩色雨条自上而下，每键不同色
-    const col = Math.round(nx * 22);
-    const ph = pvHash(col, 3) * 1.4;
-    const y = (t * 0.55 * sp + ph) % 1.35;
-    const k = Math.max(0, 1 - Math.abs(ny - y) / 0.16);
-    if (!k) return [0, 0, 0];
-    return pvScale(pvHue(pvHash(col, Math.floor(t * 0.55 * sp + ph) * 17) * 360), br * k);
-  }
-  if (sel === 6) {                                 // 彩虹轮盘：整体逆时针转，接缝在 Q/A 左侧
-    let u = nx - 0.22; if (u < 0) u += 1;
-    const hue = 300 - u * 300 - t * 55 * sp;
-    const seam = (u > 0.995 || u < 0.005) ? 0.25 : 1;
-    return mix(seam, hue);
-  }
-  if (sel === 7) {                                 // 涟漪扩散：点击某键从该键向外扩散随机色
-    const ev = pvLastEvt(t, 2.6);
-    if (!ev) return [0, 0, 0];
-    const d = Math.hypot(nx - ev.e.nx, ny - ev.e.ny);
-    const r = ev.age * 0.75 * sp;
-    const band = Math.max(0, 1 - Math.abs(d - r) / 0.22);
-    if (!band) return [0, 0, 0];
-    return pvScale(p.multi ? pvHue(pvHash(nx * 13, ny * 11) * 360) : p.color, br * band);
-  }
-  if (sel === 8) {                                 // 繁星点点：慢速闪烁、平滑淡入淡出
-    const ph = pvHash(nx * 13, ny * 17) * 6.28;
-    const s = Math.sin(ph + t * 0.9 * sp);
-    const k = s > 0 ? s ** 4 : 0;
-    return mix(0.04 + k * 0.96, pvHash(nx, ny) * 360);
-  }
-  if (sel === 10) {                                // 川流不息：像贪吃蛇一样一段在跑，其余熄灭
-    const head = ((t * 0.22 * sp + 0.35) % 1.35) - 0.15;
-    const d = head - nx;
-    if (d < 0 || d > 0.42) return [0, 0, 0];
-    const k = Math.max(0, 1 - d / 0.42);
-    return mix(0.15 + 0.85 * k, nx * 300 + t * 60);
-  }
-  if (sel === 11) return mix(1, nx * 300 - t * 70 * sp);           // 随波逐流：从左到右
-  if (sel === 12) {                                // 如影随形：按下哪个键就亮哪个键（随机色，缓慢淡出）
-    let k = 0, hue = 0;
-    for (const e of PV_EVT) {
-      if (e.slot !== slot) continue;
-      const age = t - e.t0;
-      if (age < 0 || age > 5) continue;
-      const v = 1 - age / 5;
-      if (v > k) { k = v; hue = e.hue; }
-    }
-    if (!k) return [0, 0, 0];
-    return pvScale(pvHue(hue), br * k);
-  }
-  if (sel === 13) {                                // 正弦光波：一条波带上下扫
-    const y0 = 0.5 + 0.5 * Math.sin(t * 1.1 * sp);
-    const k = Math.max(0, 1 - Math.abs(ny - y0) / 0.3);
-    if (!k) return [0, 0, 0];
-    return mix(k, nx * 300 + t * 50);
-  }
-  if (sel === 15) {                                // 旋转风车：顺时针
-    const a = Math.atan2(ny - cy, nx - cx);
-    return fixed(-a * 57.3 + t * 70 * sp);
-  }
-  if (sel === 16) return fixed(ny * 300 + t * 80 * sp);            // 七彩瀑布：从上到下
-  if (sel === 17) return fixed(dist * 320 - t * 75 * sp);          // 花开富贵：中心向外
-  return mix(1, 0);
-}
-function previewTick(ts) {
-  if (!previewActive()) { stopPreview(); return; }
-  PREVIEW.raf = requestAnimationFrame(previewTick);
-  // 21ms 渲染 tick（≈48fps）；动画 tick 5ms（每个渲染 tick 约 4 个固件 tick）
-  if (ts - PREVIEW.last < 21) return;
-  const dtMs = PREVIEW.last ? Math.min(120, ts - PREVIEW.last) : 21;   // 固件 tick 用真实耗时推进
-  PREVIEW.last = ts;
-  const p = previewParams();
-  if (!p) return;
-  const t = (ts - PREVIEW.t0) / 1000;
+// 只消费已成功发送的缓存，不做音频分析，也不发送 HID；后台 RAF 暂停不会影响律动。
+function paintMusicPreview() {
   const kb = document.querySelector('#keyboard .kb');
-  // 固件帧：常亮(1) 静态径向彩虹；花开富贵(17) 反向旋转；呼吸(2) 列渐变+整体呼吸；
-  // 梦幻彩虹(3) 全键同色每帧 -1 循环
-  let fwPix = null;
-  if (window.FW_TABLES && [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16, 17].includes(p.sel)) {
-    const n = Math.floor(t * 30 * p.speed);            // 帧号（速度=帧间隔的近似）
-    if (p.sel === 4 || p.sel === 7 || p.sel === 13) {
-      fwPix = fwTrigFrame(p, dtMs);                    // 0x5968 位平面引擎（按固件 tick 推进）
-    } else if ([5, 6, 8, 10, 12, 15].includes(p.sel)) {
-      fwPix = fwExtraFrame(p, dtMs);                   // 0x9A4C/0x6081/0xAB9B/0x8A06/0x64A9/0x7E94
-    } else if (p.sel === 2) {
-      fwPix = fwBreathFrame(((0x7F - n) % 128 + 128) % 128, p);   // A317 反向 1/帧
-    } else if (p.sel === 3) {
-      fwPix = fwHueCycleFrame((0xBF - n) % 192, { ...p, multi: true });  // 固定彩虹
-    } else if (p.sel === 11) {
-      const lim = p.multi ? 192 : 96;                   // A317 limit 0xC0 / 0x60
-      fwPix = fwWaveFrame((lim - 1 - n) % lim, p);
-    } else if (p.sel === 16) {
-      fwPix = fwWaterfallFrame((0xBF - n) % 192, { ...p, multi: true });  // 固定彩虹
-    } else {
-      const base = p.sel === 17 ? (((0xBF - 2 * n) % 192 + 192) % 192) : 0;
-      fwPix = fwFrame(p.sel, base, p);
-    }
-  }
-  if (kb) kb.classList.add('color-mode');
-  // 固件坐标：col = slot/6（0..20 列）、row = slot%6（0..5 行）；归一化到 0..1
+  if (!kb) return;
+  kb.classList.add('color-mode', 'music-mode');
+  const frame = MUS.preview;
   document.querySelectorAll('#keyboard .key').forEach(el => {
     const slot = Number(el.dataset.slot);
-    const col = Math.floor(slot / 6), row = slot % 6;
-    const nx = col / 14, ny = row / 5;
-    const rgb = (fwPix ? (fwPix[slot] || [0, 0, 0]) : pvColor(p.sel, slot, nx, ny, t, p))
+    const off = Number.isInteger(slot) && slot >= 0 && slot < 126 ? slot * 3 : -1;
+    const r = frame && off >= 0 ? frame[off] || 0 : 0;
+    const g = frame && off >= 0 ? frame[off + 1] || 0 : 0;
+    const b = frame && off >= 0 ? frame[off + 2] || 0 : 0;
+    el.style.setProperty('--cs', rgbToHex(r, g, b));
+    el.classList.toggle('music-on', !!(r || g || b));
+  });
+}
+// 固件帧是 378B 交错 RGB（slot*3）。
+function lightPreviewPixel(frame, slot) {
+  if (!frame || typeof frame.length !== 'number' || frame.length !== 378) return [0, 0, 0];
+  const off = slot * 3;
+  return [frame[off] || 0, frame[off + 1] || 0, frame[off + 2] || 0];
+}
+function paintLightPreview(frame) {
+  const kb = document.querySelector('#keyboard .kb');
+  if (kb) kb.classList.add('color-mode');
+  document.querySelectorAll('#keyboard .key').forEach(el => {
+    const rgb = lightPreviewPixel(frame, Number(el.dataset.slot))
       .map(v => Math.max(0, Math.min(255, Math.round(v))));
     el.style.setProperty('--cs', rgbToHex(rgb[0], rgb[1], rgb[2]));
   });
 }
+// ── 原固件执行预览 ─────────────────────────────────────────────
+// 在 Worker 中执行白名单固件：动画帧、相位、余辉与中断时序都来自真实指令。
+// 预览参数不会写入设备。
+const ROM_PREVIEW = { worker: null, gen: 0, seq: 0, on: false, ready: false, failed: '',
+  key: '', paramsKey: '', frame: null, cycle: 0, sent: 0,
+  originWall: 0, originCycle: 0, held: new Set() };
+
+function romPreviewAvailable() {
+  const api = window.LEOBOG_FW_PREVIEW;
+  return !!(api && typeof api.workerSource === 'string' && api.workerSource &&
+    typeof Worker === 'function' && typeof Blob === 'function' &&
+    typeof URL !== 'undefined' && URL && typeof URL.createObjectURL === 'function');
+}
+function romPreviewActive() { return ROM_PREVIEW.on && !ROM_PREVIEW.failed; }
+function romPreviewConfig() {
+  const p = previewParams();
+  if (!p) return null;
+  const palette = [];
+  for (let i = 0; i < 7; i++) palette.push(p.color.slice(0, 3));
+  return { model: String(S.modelName || '').toLowerCase(), mode: p.sel, speed: p.spd, level: p.level,
+    multi: !!p.multi, forward: !!p.forward, palette };
+}
+function romPreviewParamsKey(config) {
+  return [config.speed, config.level, config.multi ? 1 : 0, config.forward ? 1 : 0,
+    config.palette[0].join(',')].join('|');
+}
+function romPreviewStop() {
+  ROM_PREVIEW.gen++;                              // 旧会话的迟到消息全部作废
+  const worker = ROM_PREVIEW.worker;
+  ROM_PREVIEW.worker = null;
+  ROM_PREVIEW.on = false; ROM_PREVIEW.ready = false; ROM_PREVIEW.sent = 0;
+  ROM_PREVIEW.frame = null; ROM_PREVIEW.key = ''; ROM_PREVIEW.paramsKey = '';
+  ROM_PREVIEW.held.clear();
+  if (worker) {
+    try { worker.postMessage({ type: 'dispose', id: 0 }); } catch (e) {}
+    try { worker.terminate(); } catch (e) {}
+  }
+}
+function romPreviewFail(message) {
+  ROM_PREVIEW.failed = message || '不可用';
+  romPreviewStop();
+  Leobog.log('原固件预览已停用：' + ROM_PREVIEW.failed + '；请使用支持 Worker 的 Chrome/Edge 并刷新', 'warn');
+}
+function romPreviewHandle(gen, data) {
+  if (gen !== ROM_PREVIEW.gen || !data) return;
+  if (data.type === 'error') { romPreviewFail(data.message || '执行错误'); return; }
+  if (data.type === 'ready') {
+    ROM_PREVIEW.ready = true;
+    ROM_PREVIEW.frame = data.frame; ROM_PREVIEW.cycle = data.cycle;
+    ROM_PREVIEW.sent = 0;
+    ROM_PREVIEW.originWall = performance.now();         // 墙钟锚点
+    ROM_PREVIEW.originCycle = data.cycle;
+    return;
+  }
+  if (data.type === 'frame') {
+    ROM_PREVIEW.frame = data.frame; ROM_PREVIEW.cycle = data.cycle; ROM_PREVIEW.sent = 0;
+  }
+}
+function romPreviewStart(config) {
+  let worker;
+  try {
+    const url = URL.createObjectURL(new Blob([window.LEOBOG_FW_PREVIEW.workerSource], { type: 'text/javascript' }));
+    try { worker = new Worker(url); } finally { URL.revokeObjectURL(url); }
+  } catch (e) {
+    romPreviewFail('启动失败：' + (e && e.message || e));
+    return false;
+  }
+  const gen = ++ROM_PREVIEW.gen;
+  ROM_PREVIEW.worker = worker;
+  ROM_PREVIEW.ready = false; ROM_PREVIEW.frame = null; ROM_PREVIEW.sent = 0;
+  ROM_PREVIEW.paramsKey = romPreviewParamsKey(config);
+  worker.onmessage = e => romPreviewHandle(gen, e && e.data);
+  worker.onerror = e => { if (gen === ROM_PREVIEW.gen) romPreviewFail('运行异常'); };
+  worker.postMessage({ type: 'init', id: 0, config });
+  return true;
+}
+// 设备切换灯效会重建状态；速度/亮度/颜色只在原会话中改参数，不重置相位。
+function romPreviewSync() {
+  if (!previewActive() || ROM_PREVIEW.failed) { ROM_PREVIEW.on = romPreviewActive(); return; }
+  if (!romPreviewAvailable()) { ROM_PREVIEW.on = false; return; }
+  const config = romPreviewConfig();
+  if (!config) { ROM_PREVIEW.on = false; return; }
+  const key = config.model + '|' + config.mode;
+  const paramsKey = romPreviewParamsKey(config);
+  if (ROM_PREVIEW.worker && ROM_PREVIEW.key === key) {
+    ROM_PREVIEW.on = true;
+    if (ROM_PREVIEW.paramsKey !== paramsKey) {
+      ROM_PREVIEW.paramsKey = paramsKey;
+      ROM_PREVIEW.worker.postMessage({ type: 'update', id: ++ROM_PREVIEW.seq, config });
+    }
+    return;
+  }
+  ROM_PREVIEW.key = key;
+  ROM_PREVIEW.on = romPreviewStart(config);
+}
+// 用“墙钟锚点 → 目标周期”反推还差多少，避免每段 advance 的过度执行累积成加速。
+function romPreviewTick(ts) {
+  if (!ROM_PREVIEW.on || !ROM_PREVIEW.worker) return null;
+  if (!ROM_PREVIEW.ready || ROM_PREVIEW.sent) return ROM_PREVIEW.frame;
+  const targetCycle = ROM_PREVIEW.originCycle + (ts - ROM_PREVIEW.originWall) * 24000;
+  const needCycles = targetCycle - ROM_PREVIEW.cycle;
+  if (needCycles < 12000) return ROM_PREVIEW.frame;      // 不足 0.5ms，先不推进
+  let ms = needCycles / 24000;
+  if (ms > 100) {                                         // 后台/长卡顿：重新锚定，不补跑
+    ROM_PREVIEW.originWall = ts;
+    ROM_PREVIEW.originCycle = ROM_PREVIEW.cycle;
+    ms = 100;
+  }
+  ROM_PREVIEW.sent = ts;
+  ROM_PREVIEW.worker.postMessage({ type: 'advance', id: ++ROM_PREVIEW.seq, ms });
+  return ROM_PREVIEW.frame;
+}
+// 原版按键产生器只认原矩阵槽（col*6+row）；保留槽由固件表判定。
+function romPreviewKey(slot, down) {
+  if (!romPreviewActive() || !ROM_PREVIEW.ready || !ROM_PREVIEW.worker) return false;
+  if (!Number.isInteger(slot) || slot < 0 || slot > 125) return false;
+  if (down) ROM_PREVIEW.held.add(slot); else ROM_PREVIEW.held.delete(slot);
+  ROM_PREVIEW.worker.postMessage({ type: 'key', id: ++ROM_PREVIEW.seq, slot: slot, down: !!down });
+  return true;
+}
+
+function previewTick(ts) {
+  const app = $('app'), music = musicPreviewActive();
+  if (!app || app.style.display === 'none' || (!previewActive() && !music)) { stopPreview(); return; }
+  PREVIEW.raf = requestAnimationFrame(previewTick);
+  if (music) { paintMusicPreview(); return; }
+  romPreviewSync();                              // 参数变化实时同步到原固件会话
+  paintLightPreview(romPreviewTick(ts));
+}
 function stopPreview() {
   if (PREVIEW.raf) cancelAnimationFrame(PREVIEW.raf);
-  PREVIEW.raf = 0;
-  FW_TRIG = null;                                  // 退出预览：清掉位平面/拖尾状态
-  FW_EXTRA = null;
-  FW_EXTRA_HELD.clear();
-  if (S.lightSel === 21) return;
+  PREVIEW.raf = 0; PREVIEW.mode = ''; PREVIEW.sel = null;
+  romPreviewStop();
   const kb = document.querySelector('#keyboard .kb');
+  if (kb) kb.classList.remove('music-mode');
+  document.querySelectorAll('#keyboard .key').forEach(el => el.classList.remove('music-on'));
+  if (inCustomColorMode()) return;                  // 只保留当前自定义画布，其他页面不残留音乐颜色
   if (kb) kb.classList.remove('color-mode');
   document.querySelectorAll('#keyboard .key').forEach(el => el.style.removeProperty('--cs'));
 }
 function updatePreview() {
-  if (previewActive()) {
-    if (!PREVIEW.raf) {
-      PREVIEW.t0 = performance.now(); PREVIEW.last = 0;
-      PREVIEW.raf = requestAnimationFrame(previewTick);
-    }
-  } else stopPreview();
+  const app = $('app');
+  if (!app || app.style.display === 'none') { stopPreview(); return; }
+  const lightReady = previewActive() && romPreviewAvailable() && !ROM_PREVIEW.failed;
+  const mode = musicPreviewActive() ? 'music' : lightReady ? 'light' : '';
+  if (!mode) { stopPreview(); return; }
+  if (PREVIEW.mode !== mode || (mode === 'light' && PREVIEW.sel !== S.lightSel)) stopPreview();
+  PREVIEW.mode = mode; PREVIEW.sel = mode === 'light' ? S.lightSel : null;
+  if (!PREVIEW.raf) PREVIEW.raf = requestAnimationFrame(previewTick);
 }
 
 // ── 自定义模式画笔：点/划 = 用当前色涂；同色再点 = 擦除；橡皮开关 = 直接擦 ──
@@ -3935,7 +3595,11 @@ $('keyboard').addEventListener('pointerdown', e => {
   if (!inCustomColorMode()) {
     if (previewActive() && S.lightSel === 12) {       // 如影随形：按住亮、松开淡出
       const pel = e.target.closest('.key');
-      if (pel) { e.preventDefault(); fwExtraPress(12, Number(pel.dataset.slot)); }
+      if (pel) {
+        e.preventDefault();
+        const slot = Number(pel.dataset.slot);
+        romPreviewKey(slot, true);
+      }
     }
     return;
   }
@@ -3955,22 +3619,20 @@ document.addEventListener('pointermove', e => {
   if (!el || !$('keyboard').contains(el)) return;
   csPaintSlot(Number(el.dataset.slot));
 });
-function fwExtraReleaseAll() {
-  for (const slot of [...FW_EXTRA_HELD]) fwExtraRelease(12, slot);
+function releasePreviewKeys() {
+  for (const slot of [...ROM_PREVIEW.held]) romPreviewKey(slot, false);
 }
-document.addEventListener('pointerup', () => { csDrag = null; fwExtraReleaseAll(); });
-document.addEventListener('pointercancel', fwExtraReleaseAll);
+document.addEventListener('pointerup', () => { csDrag = null; releasePreviewKeys(); });
+document.addEventListener('pointercancel', releasePreviewKeys);
 
 $('keyboard').onclick = e => {
+  if (S.section === 'music') return;                // 同步预览只读，不触发改键或灯效点击事件
   if (inCustomColorMode()) return;                  // 上色模式下点击=选色，不进键位编辑器
   const el = e.target.closest('.key');
   if (!el) return;
   if (previewActive()) {                            // 预览中：点击触发按键类效果，不进键位编辑器
     const pslot = Number(el.dataset.slot);
-    fwTrigKey(S.lightSel, pslot);                   // 模式 4/7：按键 = 位平面种子（0x1806/0x186C）
-    const geo = pvGeo();
-    const g = geo && geo.get(pslot);
-    if (g) pvOnKeyClick(pslot, g[0], g[1]);
+    if (S.lightSel === 4 || S.lightSel === 7) romPreviewKey(pslot, true);   // 模式 12 的按住/抬起由 pointer 事件处理
     return;
   }
   const slot = Number(el.dataset.slot);
@@ -4161,7 +3823,7 @@ function updateDirtyUI() {
   $('connectBtn').disabled = applying;
   if ($('capStop').style.display === 'none') $('capStart').disabled = !S.channel;   // 录制中不碰开始按钮
   const mus = $('musStart');
-  if (mus) mus.disabled = !S.channel || MUS.on || applying || recoveryPending;
+  if (mus) mus.disabled = !S.channel || MUS.on || MUS.starting || applying || recoveryPending;
   if ($('ltNotes')) renderLightNotes();
 }
 
@@ -4333,7 +3995,7 @@ async function applyAll(opts = {}) {
   if (doSet) parts.push('设置：' + (setOps.length ? setOps.map(o => o.key).join('、') : '同值写回'));
   const wlNote = S.channel === 'wireless' ? '\n无线通道写入和读回校验较慢，每页要几秒，请勿断开设备。' : '';
   if (!opts.skipConfirm && !confirm(`将写入：${parts.join('、')}。写后自动读回逐字节校验。${wlNote}\n继续？`)) return;
-  if (MUS.on) { stopMusic(); Leobog.log('应用配置前已停止音乐律动，避免 HID 通道并发', 'warn'); }
+  if (MUS.on || MUS.starting) { stopMusic(); Leobog.log('应用配置前已停止音乐律动，避免 HID 通道并发', 'warn'); }
   if (!beginApplying()) return;
   const pace = ms => new Promise(r => setTimeout(r, ms));   // 块间喘息：固件 flash 提交期不被打断
   let pipelineOk = true;

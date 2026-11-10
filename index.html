@@ -47,7 +47,6 @@
          color: var(--fg); background: var(--bg); margin: 0; overflow: hidden; }
   h1 { font-size: 21px; margin: 0 0 4px; }
   h2 { font-size: 16px; margin: 0 0 10px; border: 0; padding: 0; }
-  .sub { color: var(--muted); font-size: 13px; }
   .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
   .warn { color: var(--warn); font-weight: 600; }
   code { font-family: ui-monospace, Consolas, monospace; font-size: 13px; background: var(--bg);
@@ -141,7 +140,6 @@
              background: var(--card); border-right: 1px solid var(--line); }
   #sidebar .brand { padding: 16px 16px 10px; }
   #sidebar .brand h1 { font-size: 17px; margin: 0; }
-  #sidebar .brand .sub { font-size: 12px; }
   #nav { display: flex; flex-direction: column; gap: 4px; padding: 8px; flex: 1; }
   #nav button { display: block; width: 100%; text-align: left; padding: 11px 14px;
                 border-radius: 10px; border: 1px solid transparent; background: transparent;
@@ -230,14 +228,17 @@
   .kb.color-mode .key .kn { color: rgba(255,255,255,.42); }
   .kb.color-mode .key .kb2 { display: none; }
   .kb.color-mode .key:hover { box-shadow: 0 0 0 2px var(--accent); z-index: 2; }
-  .kb.color-mode .key.cs-on { box-shadow: 0 0 10px var(--cs, transparent), 0 0 2px var(--cs, transparent),
+  .kb.music-mode .key.music-on { box-shadow: 0 0 10px var(--cs, transparent), 0 0 2px var(--cs, transparent),
     inset 0 0 0 1px rgba(255,255,255,.28); }
-  .kb.color-mode .key.cs-on .kn { color: #fff; }
+  .kb.music-mode .key.music-on .kn { color: #fff; }
+  /* 音乐预览只读；没有点亮的键保持熄灭，不显示悬停/按压的编辑反馈。 */
+  .kb.music-mode .key { cursor: default; opacity: 1; transition: none; }
+  .kb.music-mode .key:active { transform: none; }
+  .kb.music-mode .key:not(.music-on):hover { box-shadow: inset 0 0 0 1px rgba(0,0,0,.55); }
+  .mus-preview-hint { flex-basis: 100%; }
   .cs-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
   .cs-bar button { padding: 4px 10px; font-size: 12.5px; }
   .cs-bar b { color: var(--accent); }
-  /* 自定义模式：画笔工具竖排贴在调色盘右侧（第 4 列） */
-  .cp.with-tools { grid-template-columns: 160px 18px 1fr auto; }
   .cs-bar.col { margin: 0; width: 100%; display: grid; grid-template-columns: 1fr 1fr;
     gap: 6px; align-content: start; }
   .cs-bar.col button { width: 100%; padding: 4px 2px; font-size: 12px; white-space: nowrap; }
@@ -415,7 +416,6 @@
   .ed-block { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; font-size: 13px; }
   .ed-block label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
   .ed-label { color: var(--muted); font-size: 12px; min-width: 32px; }
-  .ed-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
   #edPalette { display: flex; flex-direction: column; gap: 14px; }
   .pal-group { }
   .pal-group-h { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
@@ -443,12 +443,6 @@
   .pal-slots .pal-key.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
   .pal-slots .pal-key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pal-slots .pal-key.empty { color: var(--muted); border-style: dashed; }
-  #light .led-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-  #light .led-cell { padding: 8px 14px; border: 1px solid var(--line); border-radius: 999px;
-          cursor: pointer; background: var(--card); font-size: 13px; user-select:none; }
-  #light .led-cell:hover { border-color: var(--accent); }
-  #light .led-cell.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-  #light .led-cell.cur:not(.on) { border-color: var(--warn); background: #fff8c533; }
   /* 灯效：左=模式表格铺满｜右=滑条 + 多彩按钮 + PS 风格调色盘 */
   .lt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
   .lt-mode { display: block; width: 100%; text-align: center; margin: 0; padding: 9px 6px;
@@ -562,7 +556,7 @@
     <div class="side-foot">
       <a href="https://github.com/nuotu/leobog-one-webui" target="_blank"
          rel="noopener noreferrer" title="打开项目仓库">© nuotu</a>
-      <span class="side-version">v1.0.2</span>
+      <span class="side-version">v1.0.9</span>
     </div>
   </aside>
 
@@ -687,12 +681,12 @@
             <div id="music" class="bar" style="margin-bottom:0">
               <button id="musStart" disabled>开始律动</button>
               <button id="musStop" disabled>停止</button>
-              <button id="capStart" disabled>记录帧</button>
-              <button id="capStop" style="display:none">停止记录并下载</button>
               <label>灵敏度 <input type="range" id="musGain" min="0.4" max="3" step="0.1" value="1" style="vertical-align:middle">
                 <span class="muted" id="musGainVal">1.0</span></label>
               <span class="muted" id="musHint"><b>点击「开始律动」后，请选择「整个屏幕」并勾选「共享系统音频」</b>。暂不支持麦克风。
                 播放任意系统音频，键盘灯光即随节奏律动；切换窗口不会中断。</span>
+              <span id="musPreviewHint" class="muted mus-preview-hint" role="status" aria-live="polite">同步灯效预览：开始后，上方键盘将同步显示发送的灯光帧。</span>
+              <span id="musAwakeHint" class="muted" hidden></span>
             </div>
           </div>
         </div>
@@ -770,6 +764,10 @@
         <h2>日志 <span id="logLast" class="muted" style="font-weight:400;font-size:12px;margin-left:8px"></span></h2>
         <div class="log-actions">
           <button id="selfTestBtn" disabled style="display:none" title="完整读写测试：临时修改 LED/色帧并自动恢复">自动测试</button>
+          <span id="logCapture" style="display:none">
+            <button id="capStart" disabled>记录帧</button>
+            <button id="capStop" style="display:none">停止记录并下载</button>
+          </span>
           <button id="logCopy" style="display:none">复制</button>
         </div>
       </div>
@@ -780,9 +778,9 @@
 
 <script src="data/registry.js"></script>
 <script src="data/audiobar.js"></script>
-<script src="protocol.js?v=1.0.2"></script>
-<script src="fw_tables.js"></script>
-<script src="app.js?v=1.0.2"></script>
+<script src="protocol.js?v=1.0.3"></script>
+<script src="fw_preview.js?v=1.0.9"></script>
+<script src="app.js?v=1.0.9"></script>
 <!-- 51.LA 访问统计（官方异步安装） -->
 <script>
 !function(p){"use strict";!function(t){var s=window,e=document,i=p,c="".concat("https:"===e.location.protocol?"https://":"http://","sdk.51.la/js-sdk-pro.min.js"),n=e.createElement("script"),r=e.getElementsByTagName("script")[0];n.type="text/javascript",n.setAttribute("charset","UTF-8"),n.async=!0,n.src=c,n.id="LA_COLLECT",i.d=n;var o=function(){s.LA.ids.push(i)};s.LA?s.LA.ids&&o():(s.LA=p,s.LA.ids=[],o()),r.parentNode.insertBefore(n,r)}()}({id:"3RlN1P6TKpDimbsy",ck:"3RlN1P6TKpDimbsy"});

@@ -974,6 +974,151 @@ window.Leobog = (function () {
     } catch (e) { /* 心跳失败静默 */ }
   }
 
+  // 音乐会话的单次协议事务：0x44 严格收齐设置块（不保存内容），0x88 只确认原生发送。
+  // 预算从调用开始，包含排队/发送/收片；音频时钟只调用交出的 checkDeadline，signal 只表示取消。
+  // diagnostics 仅元数据：command 为命令数值，phase=queued/sending/receiving/complete；
+  // sendMs 为原生发送耗时（未 settle 时 null），收片时间从调用起算，missingChunks 为缺失片号。
+  async function musicSessionCommand(command, { device, signal, timeoutMs = 300, onDeadlineCheck } = {}) {
+    const expectReply = command === 0x44;
+    const label = expectReply ? '音乐防休眠探测' : '音乐心跳';
+    const now = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const startedAt = now();
+    let settled = false, listening = false, timer = null, deadlinePublished = false;
+    let attempted = false, sent = false, transportPending = false, waitForSlot = false;
+    let phase = 'queued', sendStartedAt = null, sendMs = null;
+    let chunks = 0, receivedChunks = 0, firstReplyMs = null, lastReplyMs = null, badChecksumCount = 0;
+    let resolveResult, rejectResult, queueSlot;
+    const result = new Promise((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+    const diagnostics = () => ({ command, phase, sendMs, receivedChunks,
+      missingChunks: expectReply ? Array.from({ length: 10 }, (_, i) => i).filter(i => !(chunks & (1 << i))) : [],
+      firstReplyMs, lastReplyMs, badChecksumCount });
+    const namedError = (name, message) => Object.assign(new Error(message), { name });
+    const timeoutError = () => Object.assign(namedError('TimeoutError', label + '超时'), { transportPending });
+    const abortReason = () => signal.reason === undefined
+      ? namedError('AbortError', label + '已取消') : signal.reason;
+    const cleanup = () => {
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      if (listening) { device.removeEventListener('inputreport', onRep); listening = false; }
+      if (signal && typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', onAbort);
+      if (deadlinePublished) {
+        deadlinePublished = false;
+        // 通知接收方不能用异常改写已经确定的协议结果，也不能阻止队列释放。
+        try { onDeadlineCheck(null); } catch (e) {}
+      }
+    };
+    const fail = (error, cancelled = false) => {
+      if (settled) return;
+      settled = true;
+      // 取失败时的快照：排队/原生挂起时不能等槽；明确取消无条件立即返回。
+      waitForSlot = !cancelled && attempted && !transportPending;
+      if (!cancelled) {
+        // 保留原生错误身份；冻结错误/原始值无法附加诊断。signal.reason 从不修改。
+        try { error.diagnostics = diagnostics(); } catch (e) {}
+      }
+      cleanup(); rejectResult(error);
+    };
+    // timer 与 app 音频时钟使用同一个入口；旧回调在 cleanup 后调用也是无副作用的 false。
+    const checkDeadline = () => {
+      if (settled) return false;
+      if (signal && signal.aborted) { fail(abortReason(), true); return false; }
+      if (now() - startedAt >= timeoutMs) { fail(timeoutError()); return false; }
+      return true;
+    };
+    const stillLive = () => {
+      if (settled) return false;
+      if (signal && signal.aborted) { fail(abortReason(), true); return false; }
+      if (!device) { fail(new TypeError(label + '必须传入本次会话的 device')); return false; }
+      if (state.channel !== 'wireless' || state.dev !== device || !device.opened) {
+        fail(namedError('InvalidStateError', label + '仅允许当前已打开的 2.4G 会话设备')); return false;
+      }
+      return checkDeadline();
+    };
+    const sendFailed = error => { if (stillLive()) fail(error); };
+    const complete = () => {
+      if (settled || !sent || (expectReply && chunks !== 0x3ff) || !stillLive()) return;
+      settled = true; waitForSlot = true; phase = 'complete';
+      const value = { elapsedMs: now() - startedAt, diagnostics: diagnostics() };
+      if (expectReply) value.bytes = 128; else value.sent = true; // 0x88 成功绝不表示键盘清醒
+      cleanup(); resolveResult(value);
+    };
+    const onAbort = () => fail(abortReason(), true);
+    const onRep = e => {
+      if (settled || !stillLive()) return;
+      if (!attempted || !e || e.reportId !== WL_RID || (e.device && e.device !== device) ||
+          !ArrayBuffer.isView(e.data) || e.data.byteLength !== 19) return;
+      const b = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
+      if (b[0] !== 0x44) return;
+      if (!wlChecksumValid(b)) { badChecksumCount++; return; }
+      const chunk = b[2], len = b[3];                 // 设置页=0，不接受 X 的高位页号
+      if (chunk > 9 || len > 14 || (chunk < 9 ? len !== 14 : len < 2)) return;
+      // 0..8 各需 14B，尾片需 >=2B；重复片不能补洞，且不改变收片进度的时间戳。
+      if (!(chunks & (1 << chunk))) {
+        chunks |= 1 << chunk; receivedChunks++;
+        lastReplyMs = now() - startedAt;
+        if (firstReplyMs === null) firstReplyMs = lastReplyMs;
+      }
+      complete();
+    };
+    try {
+      if (signal != null && (typeof signal.aborted !== 'boolean' ||
+          typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function'))
+        throw new TypeError('signal 必须是 AbortSignal');
+      if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 0x7fffffff)
+        throw new RangeError('timeoutMs 必须是 0..2147483647 内的有限毫秒数');
+      if (onDeadlineCheck != null && typeof onDeadlineCheck !== 'function')
+        throw new TypeError('onDeadlineCheck 必须是函数或 null');
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      if (onDeadlineCheck) { deadlinePublished = true; onDeadlineCheck(checkDeadline); }
+      if (stillLive()) {
+        // 单个兜底 timer，无轮询；事件/发送/出队路径也检查同一 deadline。
+        timer = setTimeout(checkDeadline, Math.max(0, Math.ceil(timeoutMs - (now() - startedAt))));
+        const queuedTask = enqueueIo(() => {
+          if (settled) return;                       // 排队中取消/超时，本槽永久 no-op
+          if (!stillLive()) return result;
+          try {
+            if (expectReply) {                       // 心跳不挂 inputreport 监听，也不等待 RX
+              device.addEventListener('inputreport', onRep);
+              listening = true;
+            }
+            if (!stillLive()) return result;
+            attempted = true; transportPending = true; phase = 'sending'; sendStartedAt = now();
+            const sendSettled = Promise.resolve(device.sendReport(WL_RID,
+              wlFrame(command, 0x01, 0, null, expectReply ? undefined : 0x23))).then(() => {
+              transportPending = false; sendMs = now() - sendStartedAt; sent = true;
+              if (settled) return;
+              if (expectReply) phase = 'receiving';
+              if (stillLive()) complete();
+            }, error => {
+              transportPending = false; sendMs = now() - sendStartedAt; sendFailed(error);
+            });
+            // 对外取消/超时立即可见，但 WebHID 无法撤回，原生发送 settle 前仍持有互斥。
+            return Promise.all([result.catch(() => {}), sendSettled]);
+          } catch (error) {                           // 同步 throw 没有仍在等待的原生 Promise
+            transportPending = false;
+            if (attempted) sendMs = now() - sendStartedAt;
+            sendFailed(error);
+          }
+          return result;
+        });
+        queueSlot = ioTail;                           // 只捕获本槽 finally，绝不等待后来的 ioTail
+        queuedTask.catch(error => fail(error));       // 消费底层晚 reject，不重发
+      }
+    } catch (error) { fail(error); }
+    try {
+      return await result;
+    } finally {
+      // 成功和 native 已 settle 的发送后失败，必须先完成本槽 ioPending-- 再对外 settle。
+      // 此标志在结果确定时捕获；取消、排队超时、挂起发送超时绝不会被后来状态改成等待。
+      if (waitForSlot) await queueSlot;
+    }
+  }
+
+  // 只读验证：严格 10 片/128B，仅返回元数据，不覆盖设置块。
+  function probeMusicAwake(options) { return musicSessionCommand(0x44, options); }
+
+  // 一次 RID19 0x88 心跳：只表示已发送，不推断键盘清醒。与 probe 共用单次入队生命周期。
+  function sendMusicHeartbeat(options) { return musicSessionCommand(0x88, options); }
+
   // ── 读灯效参数块（512B；有线 0x8a / 无线 0x49）──
   // 0x0a 写没有官方读回样本，先按命令表试；失败只告警不打断（写路径已发）。
   //
@@ -1137,7 +1282,7 @@ window.Leobog = (function () {
     readTelemetry: queued(readTelemetry),
     writeKeymap: queued(writeKeymap), writeSettings: queued(writeSettings),
     writeColor: queued(writeColor), writeMacro: queued(writeMacro), writeLed: queued(writeLed),
-    sendMusicFrame, sendMusicChunk, sendMusicPoll,
+    sendMusicFrame, sendMusicChunk, sendMusicPoll, probeMusicAwake, sendMusicHeartbeat,
     startCapture, stopCapture,
     parseMacroArea, buildMacroArea, utf16Bytes, utf16Str,
     hex, hex16,
