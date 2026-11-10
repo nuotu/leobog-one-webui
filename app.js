@@ -40,6 +40,8 @@ const USAGE = (() => {
     0xe4: 'RCtrl', 0xe5: 'RShift', 0xe6: 'RAlt', 0xe7: 'RWin',
   });
   for (let i = 0; i < 12; i++) u[0x3a + i] = 'F' + (i + 1);
+  // F13–F21 位于另一段 HID usage，不能接着 F12 连续递增；改键暂只扩展到 F21。
+  for (let i = 0; i < 9; i++) u[0x68 + i] = 'F' + (i + 13);
   return u;
 })();
 
@@ -56,6 +58,7 @@ const PALETTE = {
   })(),
   Adv: [
     ...Array.from({ length: 12 }, (_, i) => [0x3a + i, 'F' + (i + 1)]),
+    ...Array.from({ length: 9 }, (_, i) => [0x68 + i, USAGE[0x68 + i]]),
     [0x29, 'Esc'], [0x2b, 'Tab'], [0x65, 'App'], [0x49, 'Ins'], [0x4d, 'End'], [0x4c, USAGE[0x4c]],
     [0x4e, 'PgDn'], [0x4b, 'PgUp'], [0x2a, 'Backspace'], [0x4a, 'Home'], [0x39, 'CapsLock'],
     [0x48, 'Pause'], [0x28, 'Enter'], [0x2c, USAGE[0x2c]], [0x46, 'PrtSc'], [0x47, 'ScrLk'],
