@@ -954,7 +954,11 @@ window.Leobog = (function () {
   }
 
   // 发送单条无线音乐分片（节拍由 app 层 audio-clock tick 控制；本函数零 sleep）
-  // ⚠️ block 字段 = 本周期分片总数（官方 515 周期 100% 验证）；由调用方经 wlChunks 生成。
+  // ⚠️ block 必须**等于**本帧片数（ceil(TLV长度/14)）。2026-11-11/12 五种载荷实测：
+  //    block < 片数 → 未定义行为：未写入的尾部沿用上一帧字节并被当作数据解析，
+  //    显示结果取决于残留（实测既能拼出完整画面，也能缺几列，反序清场可复现缺口）；
+  //    block > 片数 或 0 → 整帧作废、键盘回退默认灯效。当年写死 block=2 正是右侧黑块的成因。
+  //    由调用方经 wlChunks 生成，勿改成常量。
   async function sendMusicChunk(fr) {
     if (!state.channel) throw new Error('设备已断开，请重新连接');
     if (state.channel !== 'wireless') throw new Error('无线律动仅支持 2.4G');

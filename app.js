@@ -399,7 +399,7 @@ window.addEventListener('beforeunload', e => {
   e.returnValue = '';                          // 不在卸载事件中尝试异步 Flash 写入。
 });
 
-// ── 出厂数据（web/data/factory.js：从 fw/hi8/hi8_fw_backup.hex 提取；两型号配置区一致）──
+// ── 出厂数据（data/models/*.js 的 factory 字段：从 fw/hi8/hi8_fw_backup.hex 提取；两型号配置区一致）──
 // 恢复出厂 = 固件真·出厂镜像：设置块 @0xC400 + 键表 Win 四页 @0xCC00/D000/D400/D600（含尾 5A A5）。
 // 官方驱动“恢复出厂”写入值与固件块差 21 字节（休眠/速度档/[26]），本页取固件镜像。
 // [14]=无线链路标志：整块覆盖时一律保留新鲜值（固件镜像里是 00=有线）。
@@ -2258,11 +2258,20 @@ $('meList').addEventListener('input', e => {
   $('meInfo').textContent = `${S.macroDraft.events.length} 个动作 · 约 ${(total / 1000).toFixed(1)} 秒`;
 });
 
-// ── 音乐律动（有线 0x08 整帧 / 无线 0x88 TLV全量快照；系统音频 → 21列频谱）──
+// ── 音乐律动（有线 0x08 整帧 / 无线 0x88 TLV全量快照；系统音频 → 频谱）──
 // 帧时钟 = AudioWorklet 音频渲染线程（后台不节流）；发送节拍 = performance.now()，零 setTimeout。
 const MUS = { on: false, starting: false, session: null, ctx: null, analyser: null, stream: null, freq: null, buf: null,
               proc: null, last: 0, inflight: false, lastSend: 0, lastKeep: 0, lastChunk: 0,
-              wlFrames: null, wlIdx: 0, armed: false, preview: null, wlPreview: null };
+              wlFrames: null, wlIdx: 0, armed: false, preview: null, wlPreview: null,
+              style: 'bars', peak: null, time: null, lastNow: 0,
+              feat: null,                                              // 公共特征（见 musFeatures）
+              level: 4, colorMode: 'multi', single: '#66ccff', singleHsv: null,  // 亮度档 0..4 / 混色|单色 / 单色色值(HSV 为拖拽源)
+              autoGain: true, gainManual: 1, peakAuto: 0.5, autoGainValue: 1, lastGainUI: 0 };
+// 亮度 5 档：直接缩放 RGB（固件原样还原颜色，实测线性可分，见 docs/协议规范.md §3.7）
+const MUS_LEVELS = [0.2, 0.4, 0.6, 0.8, 1];
+// 画布是固件帧缓冲的 126 槽（col*6+row），但 Hi8/Hi8SE 只有前 15 列有灯珠（槽 0..89），
+// 槽 90..125 是空位——固件文档 §4.12 已注明"21 列 × 6 行，实际只用 15 列"。
+const MUS_COLS = 15, MUS_ROWS = 6;
 const MUSIC_AWAKE_INTERVAL = 10000;
 const MUSIC_AWAKE_TIMEOUT = 300;
 
@@ -2356,31 +2365,679 @@ function hsl2rgb(h, s, l) {
   return [Math.round(255 * f(0)), Math.round(255 * f(8)), Math.round(255 * f(4))];
 }
 
-// 频谱 → 126 槽：21 竖列柱状（V2 用户验收样式；门限+gamma）
-function renderMusicBands(freq, buf, gain) {
-  const COLS = 21, ROWS = 6;
+// 分频表：低频 1 bin，越往高频越宽，15 列正好覆盖 bin 0..120（0Hz..11.25kHz @48k / fftSize512）。
+// 旧实现 lo=2 把 bin 0..1 整段丢掉（<187Hz），底鼓基频进不来；21 列里还有 6 列打在空槽上。
+const MUS_BIN_EDGES = (() => {
+  const edges = [];
+  for (let c = 0; c <= MUS_COLS; c++) edges.push(Math.round(120 * Math.pow(c / MUS_COLS, 1.8)));
+  return edges;
+})();
+
+// 频谱 → 15 竖列柱状（门限 + gamma 与 V2 一致）；peak 为可选峰值头（同列同色，不额外占 TLV 段）
+// hue 传入时（单色模式）所有列用同一色相，整屏同色 → 无线只需 1 段
+function renderMusicBands(freq, buf, gain, peak, rgb) {
+  const COLS = MUS_COLS, ROWS = MUS_ROWS;
   buf.fill(0);
-  const lo = 2, hi = Math.min(freq.length - 1, 120);
   for (let c = 0; c < COLS; c++) {
-    const f0 = lo + Math.floor((hi - lo) * c / COLS);
-    const f1 = Math.max(f0 + 1, lo + Math.floor((hi - lo) * (c + 1) / COLS));
+    const f0 = Math.min(freq.length, MUS_BIN_EDGES[c]);
+    const f1 = Math.min(freq.length, Math.max(f0 + 1, MUS_BIN_EDGES[c + 1]));
     let m = 0;
     for (let i = f0; i < f1; i++) if (freq[i] > m) m = freq[i];
     let amp = (m / 255) * gain;
     amp = Math.pow(Math.min(1, amp), 1.35);
-    if (amp < 0.10) continue;
-    const level = Math.max(1, Math.min(ROWS, Math.round(amp * ROWS)));
-    const [r, g, b] = hsl2rgb(Math.round(c / (COLS - 1) * 300), 1, 0.55);
+    const level = amp < 0.10 ? 0 : Math.max(1, Math.min(ROWS, Math.round(amp * ROWS)));
+    const head = peak ? Math.max(0, Math.min(ROWS - 1, Math.round(peak[c]))) : -1;
+    if (!level && head < 1) continue;
+    // 单色：按用户选的 RGB 原样还原（亮度档再统一缩放）；混色：按列取彩虹色相
+    const [r, g, b] = rgb || hsl2rgb(Math.round(c / (COLS - 1) * 300), 1, 0.55);
     for (let i = 0; i < level; i++) {
       const s = c * ROWS + (ROWS - 1 - i);
+      buf[s * 3] = r; buf[s * 3 + 1] = g; buf[s * 3 + 2] = b;
+    }
+    if (head > level) {
+      const s = c * ROWS + (ROWS - 1 - head);
       buf[s * 3] = r; buf[s * 3 + 1] = g; buf[s * 3 + 2] = b;
     }
   }
 }
 
+// ── 公共特征：所有效果都从这里读，保证"同一份音乐、不同表达" ──
+// band[c]  = 第 c 列能量（与对数频谱同源：MUS_BIN_EDGES 幂律分频 + 门限 + gamma）
+// low/mid/high/loud = 低/中/高频段与全频平均
+// lastBeat = 拍点时刻 = 全频谱通量的峰值挑选（librosa onset_detect 路线，见 musFeatures）
+// lowSm = 跳动深度的低频权重 = 低频帧间正增量的峰值保持（100ms 衰减），鼓点来跳得最狠
+const MUS_BEAT_GAP = 250;        // 最小拍间隔（aubio minioi 思路：每拍最多一跳，≈240BPM 上限）
+const MUS_BEAT_DELTA = 0.25;     // 峰值须超滑动均值的比例（librosa peak_pick delta 相对化）
+const MUS_BEAT_ABS = 0.004;      // 通量绝对下限：静音/噪声底不误触发
+const MUS_HEART_DIM = 0.6;       // 心形压暗深度：满亮(1)→最暗(0.4)
+const MUS_HEART_SCALE = 8;       // lowSm→跳动深度的缩放（lowSm≈0.125 → 满深度）
+const MUS_HEART_ENV = 100;       // 搏动回亮时间常数（ms，exp 衰减）
+function musFeatInit() {
+  MUS.feat = { band: new Float32Array(MUS_COLS), low: 0, mid: 0, high: 0, loud: 0,
+    lowPrev: 0, lowSm: 0, lastBeat: -1e9,
+    fluxPrev: null, flux1: 0, flux2: 0, fluxMean: 0,                        // 谱通量峰值挑选：基线/近两帧通量/滑动均值
+    scopeSm: null, scopeTrig: 0, scopeHue: null, scopeHueBeat: null,                    // 滑动均值缓冲/触发点 / R1 拍点换色
+    scopeTrail: null, scopeTrailT: -1e9,                                          // 余辉拖尾：滞后轨迹快照/快照时刻
+    drop: new Float32Array(MUS_COLS),
+    grav: new Float32Array(MUS_COLS), gravV: new Float32Array(MUS_COLS),  // 重力坠落：柱高/落速
+    fire: new Uint8Array(MUS_COLS * MUS_ROWS), fireAcc: 0,                 // 低频火焰：热度场/模拟步余量
+    parts: null, partBeat: -1e9, partAcc: 0 };                             // 粒子抛洒：粒子表/拍标记/补给余量
+  return MUS.feat;
+}
+
+function musFeatures(gain, now, dt) {
+  const F = MUS.feat || musFeatInit();
+  const freq = MUS.freq, n = freq.length;
+  for (let c = 0; c < MUS_COLS; c++) {
+    const f0 = Math.min(n, MUS_BIN_EDGES[c]);
+    const f1 = Math.min(n, Math.max(f0 + 1, MUS_BIN_EDGES[c + 1]));
+    let m = 0;
+    for (let i = f0; i < f1; i++) if (freq[i] > m) m = freq[i];
+    const amp = Math.pow(Math.min(1, (m / 255) * gain), 1.35);
+    F.band[c] = amp < 0.10 ? 0 : amp;
+  }
+  const mean = (i, j) => { let s = 0; for (let c = i; c <= j; c++) s += F.band[c]; return s / (j - i + 1); };
+  F.low = mean(0, 2); F.mid = mean(5, 9); F.high = mean(9, MUS_COLS - 1); F.loud = mean(0, MUS_COLS - 1);
+  // ── 跳动深度的低频权重：低频帧间正增量的峰值保持（100ms 衰减）──
+  // 只给"跳多深"加权（鼓点跳得最狠），拍点时刻交给下面的谱通量挑选器。
+  let lowE = 0;
+  const lowEnd = Math.min(n, MUS_BIN_EDGES[3]);
+  for (let i = 0; i < lowEnd; i++) lowE += freq[i];
+  lowE /= Math.max(1, lowEnd) * 255;
+  const dLow = Math.max(0, lowE - F.lowPrev);
+  F.lowPrev = lowE;
+  F.lowSm = Math.max(F.lowSm * Math.exp(-dt / 100), dLow);
+  // ── 拍点 = 全频谱通量（Foote 2000 / librosa onset_strength）+ 峰值挑选（librosa peak_pick）──
+  // 通量 = 所有频点帧间正增量之和（不分频段）：军鼓/镲/人声起音与鼓点同权，同人耳"响度突变"。
+  // 峰值挑选 = 局部极大 + 超滑动均值 + 最小间隔，只留"最明显的那一下"；一帧延迟判定（≈3ms，无感）。
+  let flux = 0;
+  if (!F.fluxPrev || F.fluxPrev.length !== n) {
+    F.fluxPrev = new Uint8Array(n);                     // 首帧只建基线，不出假拍
+  } else {
+    for (let i = 0; i < n; i++) {
+      const d = freq[i] - F.fluxPrev[i];
+      if (d > 0) flux += d;
+    }
+    flux /= Math.max(1, n * 255);
+  }
+  F.fluxPrev.set(freq);
+  F.fluxMean += (flux - F.fluxMean) * Math.min(1, dt / 1000);   // ~1s 自适应基准（响度自适应）
+  const thr = F.fluxMean * (1 + MUS_BEAT_DELTA) + MUS_BEAT_ABS;
+  if (F.flux1 > F.flux2 && F.flux1 >= flux && F.flux1 > thr && now - F.lastBeat > MUS_BEAT_GAP) {
+    F.lastBeat = now;
+  }
+  F.flux2 = F.flux1; F.flux1 = flux;
+  return F;
+}
+
+function musPut(buf, slot, col, k) {
+  buf[slot * 3] = Math.round(col[0] * k);
+  buf[slot * 3 + 1] = Math.round(col[1] * k);
+  buf[slot * 3 + 2] = Math.round(col[2] * k);
+}
+// 混色的色相统一随时间缓慢流动（约 30°/s）；单色直接用用户选的 RGB
+const musHue = opt => (opt.now * 0.03) % 360;
+const musCol = (opt, hue) => opt.rgb || hsl2rgb(hue, 1, 0.55);
+
+// 镜像频谱：低频在中轴、向两侧递减。键盘左右对称，比单向柱图整齐得多。
+function renderMusicMirror(freq, buf, opt) {
+  const F = opt.feat, ROWS = MUS_ROWS, half = (MUS_COLS - 1) / 2;
+  buf.fill(0);
+  for (let c = 0; c < MUS_COLS; c++) {
+    const m = Math.min(c, MUS_COLS - 1 - c);                  // 0..7 = 距中轴的距离
+    const level = Math.round(Math.min(1, F.band[m * 2]) * ROWS);
+    if (!level) continue;
+    const col = musCol(opt, Math.round(m / half * 300));
+    for (let i = 0; i < level; i++) musPut(buf, c * ROWS + (ROWS - 1 - i), col, 1);
+  }
+}
+
+// 水滴电平：每列只亮一个"头"，位置随该列能量浮动（快起慢落）
+function renderMusicDrop(freq, buf, opt) {
+  const F = opt.feat, ROWS = MUS_ROWS;
+  buf.fill(0);
+  for (let c = 0; c < MUS_COLS; c++) {
+    const target = Math.min(1, F.band[c]);
+    F.drop[c] = target > F.drop[c] ? target : Math.max(target, F.drop[c] - opt.dt * 0.0022);
+    const head = Math.round(F.drop[c] * (ROWS - 1));
+    musPut(buf, c * ROWS + (ROWS - 1 - head), musCol(opt, Math.round(c / (MUS_COLS - 1) * 300)), 1);
+  }
+}
+
+// 单色双层推导：心形=选色原样，波形=统一公式推导——无特例分支，白灰黑与彩色同一条路。
+//   W = HSV(h+28°, (s+0.4)×0.6, clamp(v×0.92, 0.2, 0.93))
+// 色相邻近偏移拉开距离；饱和度扶正——无色输入(s=0)因此带出淡暖彩，这是"选白色也能区分"的关键；
+// 明度永远比心形暗一档。变换非恒等（h、s 必变），任意选色无死角。
+function musWaveColor(rgb) {
+  const [h, s, v] = musRgbToHsv(rgb[0], rgb[1], rgb[2]);
+  return musHsvToRgb((h + 28) % 360,
+    Math.min(1, (s + 0.4) * 0.6),
+    Math.max(0.2, Math.min(0.93, v * 0.92)));
+}
+
+// ── 示波器波形绘制（心跳电波背景与独立「示波器」共用）──
+// 描迹 = ①窗内均值：宽 per 的滑动均值当采样点——高频相位噪声被平均掉，低中频波形形状
+//（=幅度）完整保留。②触发对齐（示波器的 trigger）：显示窗起点锁到波形上升过零点，
+// 稳态内容逐帧同相 → 形状不漂不闪、幅度无损。原理注意：波形相位以音频速率滚动，
+// 任何帧间时间平均都会把幅度平均回零交叉（只剩两横）——平滑只能做在窗内/对齐上。
+// ③余辉拖尾：滞后 MUS_SCOPE_TRAIL 的轨迹快照压暗(0.4×)重绘，只画移开的列、至多
+// MUS_SCOPE_TRAIL_MAX 格（无线段数预算 168B 内）。本帧轨迹固定一行宽；128=零交叉。
+// skip(c, r) 返回 true 的槽不画（心跳电波用它让开心形键）。
+// 颜色优先级：colAt(c) 每列取色（心跳电波 R1 拍点换色）> colOverride 恒色（心跳电波单色推导色）
+// > opt.rgb 选色原样（独立示波器单色）> 流动色相（独立示波器混色）。
+const MUS_SCOPE_TRAIL = 50;      // 余辉拖尾滞后（ms）
+const MUS_SCOPE_TRAIL_MAX = 8;   // 拖尾上限（格）：守住无线段数预算
+function musScopePaint(buf, opt, k, skip, colOverride, colAt) {
+  const time = opt.time;
+  if (!time || !time.length) return;
+  const ROWS = MUS_ROWS;
+  const F = opt.feat;
+  const L = time.length;
+  const per = L / MUS_COLS;
+  const flow = opt.rgb || hsl2rgb(Math.round(musHue(opt)), 1, 0.55);
+  // ① 滑动均值（循环窗）：每点都是宽 per 的窗内均值
+  const win = Math.max(2, Math.round(per));
+  const half = win >> 1;
+  const sm = F.scopeSm && F.scopeSm.length === L ? F.scopeSm : (F.scopeSm = new Float32Array(L));
+  let run = 0;
+  for (let i = -half; i < -half + win; i++) run += time[((i % L) + L) % L];
+  for (let i = 0; i < L; i++) {
+    sm[i] = run / win;
+    run -= time[(((i - half) % L) + L) % L];
+    run += time[(((i - half + win) % L) + L) % L];
+  }
+  // ② 触发对齐：锁到上升过零点；无过零（静音/持平）沿用上次触发点
+  let trig = F.scopeTrig | 0;
+  for (let i = 0; i < L; i++) {
+    if (sm[i] < 128 && sm[(i + 1) % L] >= 128) { trig = i; break; }
+  }
+  F.scopeTrig = trig;
+  const rowsNow = new Int8Array(MUS_COLS);
+  const colsNow = new Array(MUS_COLS);
+  for (let c = 0; c < MUS_COLS; c++) {
+    const v = sm[(trig + Math.round((c + 0.5) * per)) % L];
+    rowsNow[c] = Math.round((255 - v) / 255 * (ROWS - 1));
+    colsNow[c] = colAt ? colAt(c) : (colOverride || flow);
+  }
+  // ③ 余辉拖尾：滞后快照压暗重绘；只画移开的列、按移动距离取前 N 格
+  const tr = F.scopeTrail;
+  if (tr) {
+    const want = [];
+    for (let c = 0; c < MUS_COLS; c++) {
+      const r = tr.rows[c];
+      if (r < 0 || r === rowsNow[c]) continue;
+      if (skip && skip(c, r)) continue;
+      want.push([Math.abs(rowsNow[c] - r), c, r]);
+    }
+    want.sort((p, q) => q[0] - p[0]);
+    for (let i = 0; i < want.length && i < MUS_SCOPE_TRAIL_MAX; i++)
+      musPut(buf, want[i][1] * ROWS + want[i][2], tr.cols[want[i][1]], k * 0.4);
+  }
+  for (let c = 0; c < MUS_COLS; c++) {
+    const r = rowsNow[c];
+    if (skip && skip(c, r)) continue;
+    musPut(buf, c * ROWS + r, colsNow[c], k);
+  }
+  if (opt.now - F.scopeTrailT >= MUS_SCOPE_TRAIL) {
+    F.scopeTrailT = opt.now;
+    F.scopeTrail = { rows: rowsNow.slice(), cols: colsNow.slice() };
+  }
+}
+
+// 独立示波器：时域波形横穿整屏（SonicGlow「Scrolling Waveform」的静态窗口形态）
+function renderMusicScope(freq, buf, opt) {
+  buf.fill(0);
+  musScopePaint(buf, opt, 1, null);
+}
+
+// 心跳电波：粉红心形固定（20 个用户指定键）随拍点搏动，背景是示波器时域波形。
+// 搏动 = 拍点（谱通量峰值挑选，全频感知不分频段）给时刻 + 低频权重给深度（鼓点跳得最狠）。
+const MUS_HEART = [null, [8, 9, 11, 12], [7, 8, 9, 10, 11, 12], [7, 8, 9, 10, 11], [7, 8, 9, 10], [8]];
+function musInHeart(c, r) {
+  const row = MUS_HEART[r];
+  return !!row && row.indexOf(c) >= 0;
+}
+const MUS_HEART_PINK = [255, 26, 26];                      // 心形主题色（#ff1a1a，混色模式固定）
+function renderMusicHeart(freq, buf, opt) {
+  const F = opt.feat, ROWS = MUS_ROWS;
+  // 心形：混色固定 #ff1a1a，单色用用户选色 —— 颜色始终纯色，不闪白。
+  const pink = opt.rgb || MUS_HEART_PINK;
+  // 心跳式搏动：拍点时刻由谱通量峰值挑选给出（最明显的那一下），深度叠低频权重。
+  // 拍后 exp 回亮（MUS_HEART_ENV），静息时 env=0 → 满亮；无保持状态，不锁暗、不闪白。
+  const age = opt.now - F.lastBeat;
+  const env = age < 3 * MUS_HEART_ENV ? Math.exp(-age / MUS_HEART_ENV) : 0;
+  const depth = Math.min(1, 0.45 + F.lowSm * MUS_HEART_SCALE * 0.55);
+  const innerK = 1 - MUS_HEART_DIM * depth * env;
+  buf.fill(0);
+  for (let rw = 0; rw < ROWS; rw++) for (let c = 0; c < MUS_COLS; c++) {
+    if (musInHeart(c, rw)) {
+      const slot = c * ROWS + rw;
+      buf[slot * 3] = Math.round(pink[0] * innerK);
+      buf[slot * 3 + 1] = Math.round(pink[1] * innerK);
+      buf[slot * 3 + 2] = Math.round(pink[2] * innerK);
+    }
+  }
+  // 背景示波器：时域波形压暗衬托，只走心形之外的键（波形跟全曲走、心形跟鼓点走，两层错开）。
+  // 单色时波形取推导色（musWaveColor）不动；混色 R1 拍点换色——每拍重掷各列随机色相
+  // （0..300 避开粉紫区，粉色留给心形），拍点间颜色静止不闪。
+  if (!F.scopeHue) {
+    F.scopeHue = new Float32Array(MUS_COLS);
+    for (let c = 0; c < MUS_COLS; c++) F.scopeHue[c] = Math.random() * 300;
+    F.scopeHueBeat = F.lastBeat;
+  } else if (F.scopeHueBeat !== F.lastBeat) {
+    F.scopeHueBeat = F.lastBeat;
+    for (let c = 0; c < MUS_COLS; c++) F.scopeHue[c] = Math.random() * 300;
+  }
+  musScopePaint(buf, opt, 0.5, musInHeart, opt.rgb ? musWaveColor(opt.rgb) : null,
+    opt.rgb ? null : c => hsl2rgb(F.scopeHue[c], 1, 0.55));
+}
+
+// 重力坠落：柱体带惯性——冲上去快、掉下来加速、落地轻弹。
+// 物理取自 WLED mode_bouncing_balls（gravity、dampening 反弹阻尼），按 6 行网格缩放。
+const MUS_GRAV_ACC = 0.000028;   // 格/ms²（6 格约 0.65s 落完——慢到能看出"挂着下落"）
+const MUS_GRAV_BOUNCE = 0.5;     // 落地反弹保留的速度比例（弹跳要看得见）
+function renderMusicGrav(freq, buf, opt) {
+  const F = opt.feat, ROWS = MUS_ROWS, dt = Math.min(opt.dt, 100);
+  buf.fill(0);
+  for (let c = 0; c < MUS_COLS; c++) {
+    const target = Math.min(1, F.band[c]) * ROWS;
+    if (target > F.grav[c]) {
+      F.grav[c] = target; F.gravV[c] = 0;                    // 冲顶：瞬时，速度归零
+    } else {
+      F.gravV[c] += MUS_GRAV_ACC * dt;                       // 重力加速
+      F.grav[c] -= F.gravV[c] * dt;
+      if (F.grav[c] <= 0) {
+        F.grav[c] = 0;
+        if (F.gravV[c] > 0) F.gravV[c] = -F.gravV[c] * MUS_GRAV_BOUNCE;
+      }
+    }
+    const level = Math.round(Math.min(ROWS, F.grav[c]));
+    if (!level) continue;
+    const col = musCol(opt, Math.round(c / (MUS_COLS - 1) * 300));
+    for (let i = 0; i < level; i++) musPut(buf, c * ROWS + (ROWS - 1 - i), col, 1);
+  }
+}
+
+// 低频火焰：Fire2012（Mark Kriegsman / FastLED）热度模型逐列移植——
+// ①每格降温 ②热量向上扩散 ③底部随机火花 ④热度映射亮度。
+// 火花率与火花热量都随低频抬升：无声音只剩贴底零星小火苗（矮、无金核），低音来才烧旺。
+// 火色内置锁定（调色盘置灰不可改色）：焰体橙 + 热核金黄（热度 ≥ MUS_FIRE_HOT），
+// 不跟混色/单色选色；亮度/灵敏度照常。同列连号同色并段，成本与柱状同级。
+const MUS_FIRE_COOLING = 20;     // Fire2012 默认 55；6 格短柱散热快，降到这里火苗才有 3~4 格
+const MUS_FIRE_SPARKING = 120;   // Fire2012 默认 120（火花概率/255）
+const MUS_FIRE_HOT = 140;        // 热核阈值：热度 ≥ 140 的格烧成金黄核心
+// 内置火色（锁定）：整体压深、离白色远一点（L=0.5），仍是橙焰金核的熊熊感。
+// 两色同 S/L 且色相落同一 45° 桶（quantizeHue 取整后一致）→ 超预算并成整焰单色金，不剔列。
+const MUS_FIRE_BODY = [255, 110, 0];     // hsl(26, 1, .5) 深橙
+const MUS_FIRE_CORE = [255, 212, 0];     // hsl(50, 1, .5) 金
+function renderMusicFire(freq, buf, opt) {
+  const F = opt.feat, ROWS = MUS_ROWS, heat = F.fire;
+  const energy = Math.min(1, F.lowSm * 2.5) * 0.6 + Math.min(1, F.low) * 0.5;   // 0..1.1 声音能量
+  F.fireAcc += Math.min(opt.dt, 100);
+  while (F.fireAcc >= 33) {                                   // 模拟步 30fps（Fire2012 建议 30~100）
+    F.fireAcc -= 33;
+    for (let c = 0; c < MUS_COLS; c++) {
+      const base = c * ROWS;
+      for (let i = 0; i < ROWS; i++) {                        // ①降温
+        heat[base + i] = Math.max(0, heat[base + i] - Math.floor(Math.random() * ((MUS_FIRE_COOLING * 10) / ROWS + 2)));
+      }
+      for (let k = ROWS - 1; k >= 2; k--) {                   // ②向上扩散（原式 (h[k-1]+2*h[k-2])/3）
+        heat[base + k] = (heat[base + k - 1] + heat[base + k - 2] + heat[base + k - 2]) / 3;
+      }
+      const sparking = MUS_FIRE_SPARKING * (0.35 + energy * 1.05);
+      if (Math.random() * 255 < sparking) {                   // ③底部火花：静音密而矮，低频越高越旺
+        const y = Math.floor(Math.random() * 2);
+        heat[base + y] = Math.min(255, heat[base + y] + Math.round(80 + Math.random() * 40 + energy * 155));
+      }
+    }
+  }
+  buf.fill(0);
+  const maxI = 1 + Math.round(Math.min(1, energy * 4) * 4);    // 火苗高度包络：静音锁 2 行，有声（e≥0.25）放开全高
+  for (let c = 0; c < MUS_COLS; c++) {
+    const base = c * ROWS;
+    let top = -1;
+    for (let i = 0; i < ROWS; i++) if (heat[base + i] > 28) top = i;
+    if (top < 0) continue;
+    top = Math.min(top, maxI);
+    for (let i = 0; i <= top; i++) {
+      const hh = heat[base + i];
+      if (hh > 28) musPut(buf, c * ROWS + (ROWS - 1 - i), hh >= MUS_FIRE_HOT ? MUS_FIRE_CORE : MUS_FIRE_BODY, 1);
+    }
+  }
+}
+
+// 粒子抛洒：WLED FXparticleSystem 的位置/速度/重力/ttl 模型——
+// 拍点向上抛一撮粒子，重力拉回，ttl 到期渐灭；响度持续时也有零星补给。
+function musPartSpawn() {
+  return { x: Math.random() * MUS_COLS, y: MUS_ROWS - 0.5 - Math.random() * 0.8,
+    vx: (Math.random() - 0.5) * 0.02, vy: -(0.008 + Math.random() * 0.016),
+    ttl: 500 + Math.random() * 700, hue: Math.floor(Math.random() * 300) };
+}
+function renderMusicPart(freq, buf, opt) {
+  const F = opt.feat;
+  if (!F.parts) F.parts = [];
+  if (F.partBeat !== F.lastBeat) {                            // 拍点爆发：越重抛越多
+    F.partBeat = F.lastBeat;
+    const n = 2 + Math.round(Math.min(1, F.lowSm * 5) * 4);
+    for (let i = 0; i < n && F.parts.length < 12; i++) F.parts.push(musPartSpawn());
+  }
+  F.partAcc += opt.dt;
+  if (F.partAcc > 200 && F.loud > 0.15 && F.parts.length < 12) {  // 响度补给
+    F.partAcc = 0;
+    F.parts.push(musPartSpawn());
+  }
+  buf.fill(0);
+  const dt = Math.min(opt.dt, 100);
+  for (let i = F.parts.length - 1; i >= 0; i--) {
+    const p = F.parts[i];
+    p.vy += 0.00005 * dt;                                    // 重力（向下为正）
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.ttl -= dt;
+    if (p.ttl <= 0 || p.y < -1 || p.y > MUS_ROWS || p.x < -1 || p.x > MUS_COLS) {
+      F.parts.splice(i, 1); continue;
+    }
+    const c = Math.round(p.x), r = Math.round(p.y);
+    if (c < 0 || c >= MUS_COLS || r < 0 || r >= MUS_ROWS) continue;
+    musPut(buf, c * MUS_ROWS + r, opt.rgb || hsl2rgb(p.hue, 1, 0.55), Math.min(1, p.ttl / 400));
+  }
+}
+
+// ── 律动效果表：每个效果只负责把 freq 画进 378B 帧缓冲（槽 col*6+row）──
+// 无线下"段数"就是帧成本：整屏同色 1 段，逐列异色最多 15 段（10fps）。
+// 顺序即按钮顺序；bars 放第一个（默认效果，也是"频谱"基准）
+
+
+const MUS_STYLES = {
+  bars:   { name: '对数频谱', render: (freq, buf, opt) => renderMusicBands(freq, buf, opt.gain, null, opt.rgb) },  // 纯柱体
+  mirror: { name: '镜像频谱', render: renderMusicMirror },
+  drop:   { name: '水滴电平', render: renderMusicDrop },
+  heart:  { name: '心跳电波', render: renderMusicHeart },
+  scope:  { name: '示波器', render: renderMusicScope },
+  grav:   { name: '重力坠落', render: renderMusicGrav },
+  fire:   { name: '低频火焰', render: renderMusicFire },
+  part:   { name: '粒子抛洒', render: renderMusicPart },
+};
+
+function musicRender(now) {
+  const dt = MUS.lastNow ? Math.min(250, Math.max(1, now - MUS.lastNow)) : 16;
+  MUS.lastNow = now;
+  if (MUS.peak) {                                             // 峰值头回落约 1.8 格/秒
+    for (let c = 0; c < MUS_COLS; c++) if (MUS.peak[c] > 0) MUS.peak[c] = Math.max(0, MUS.peak[c] - dt * 0.0018);
+  }
+  const gain = MUS.autoGain ? musicAutoGain(dt) : musicGain();
+  // 自动增益是逐帧实时重算的，面板上的数值也跟着刷新（200ms 节流，别在音频线程里刷 DOM）
+  if (MUS.autoGain && now - MUS.lastGainUI > 200) {
+    MUS.lastGainUI = now;
+    const el = $('musAutoGainVal');
+    if (el) el.textContent = '×' + MUS.autoGainValue.toFixed(1);
+  }
+  const rgb = MUS.colorMode === 'single' ? musHexToRgb(MUS.single) : null;
+  const feat = musFeatures(gain, now, dt);                    // 一次分析，8 个效果共用
+  (MUS_STYLES[MUS.style] || MUS_STYLES.bars).render(MUS.freq, MUS.buf, { now, dt, gain, rgb, feat, time: MUS.time });
+  const k = MUS_LEVELS[MUS.level];
+  if (k < 1) for (let i = 0; i < MUS.buf.length; i++) MUS.buf[i] = Math.round(MUS.buf[i] * k);
+}
+
+// ── 颜色换算：本段要被测试单独抽取运行，不能依赖灯效页的 hexToRgb/rgbToHsv ──
+function musHexToRgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  const n = m ? parseInt(m[1], 16) : 0;
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function musRgbToHex(r, g, b) {
+  return '#' + [r, g, b].map(v =>
+    Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+}
+function musRgbToHsv(r, g, b) {
+  const R = r / 255, G = g / 255, B = b / 255;
+  const mx = Math.max(R, G, B), mn = Math.min(R, G, B), d = mx - mn;
+  let h = 0;
+  if (d) {
+    if (mx === R) h = ((G - B) / d + 6) % 6;
+    else if (mx === G) h = (B - R) / d + 2;
+    else h = (R - G) / d + 4;
+    h *= 60;
+  }
+  return [h, mx ? d / mx : 0, mx];
+}
+function musHsvToRgb(h, s, v) {
+  const hh = ((h % 360) + 360) % 360;
+  const c = v * s, x = c * (1 - Math.abs((hh / 60) % 2 - 1)), m = v - c;
+  const rgb = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][Math.floor(hh / 60)] || [c, c, c];
+  return rgb.map(t => Math.round((t + m) * 255));
+}
+
+
+// 自动增益：逐帧实时估算音源响度并换算灵敏度（每帧都重算，跟着音乐走）
+// 用 RMS 而不是单个 bin 的最大值：getByteFrequencyData 是 dB 刻度，音乐里总有某个 bin 顶到 250+，
+// 拿 max 当响度会让增益几乎恒定在 ×1，等于没开自动。
+function musicAutoGain(dt) {
+  const hi = Math.min(MUS.freq.length, MUS_BIN_EDGES[MUS_COLS]);
+  let sum = 0;
+  for (let i = 0; i < hi; i++) { const v = MUS.freq[i] / 255; sum += v * v; }
+  const p = Math.sqrt(sum / Math.max(1, hi));
+  // 只跟「慢速均值」走（快起慢落），目标拉到 ~70% 量程而非满量程，给鼓点瞬态留 headroom。
+  // 之前目标 0.75/peak 且 peak 只升不降，安静歌会被推到满、律动失去起伏（用户反馈"推太高"）。
+  MUS.peakAuto += (p - MUS.peakAuto) * (1 - Math.exp(-dt / 600));   // 双向平滑，不"只升不降"
+  const target = Math.max(0.10, Math.min(0.70, MUS.peakAuto));      // 目标钳到 0.10..0.70
+  MUS.autoGainValue = Math.max(1, Math.min(3, 0.55 / target));      // 上限 ×3（原来 ×6）
+  return MUS.autoGainValue;
+}
+
+function setMusicStyle(id) {
+  if (!MUS_STYLES[id] || MUS.style === id) return;
+  MUS.style = id;
+  if (MUS.peak) MUS.peak.fill(0);
+  musFeatInit();                                    // 换效果时清掉拍点/拖尾状态，避免带过去
+  renderMusicStyles();
+  renderMusicParams();                              // 火焰要置灰调色盘，切效果时刷新参数栏
+  Leobog.log('律动效果：' + MUS_STYLES[id].name, 'ok');
+}
+
+// 左栏：效果按钮（点选即切换，律动中也能切）
+function renderMusicStyles() {
+  const host = $('musStyles');
+  if (!host) return;
+  host.innerHTML = Object.keys(MUS_STYLES).map(id =>
+    `<button type="button" data-style="${id}" class="${MUS.style === id ? 'on' : ''}">${MUS_STYLES[id].name}</button>`
+  ).join('');
+}
+
+// ── 调色盘：与「键盘灯效」同款（SV 面板 + 色相条 + Hex/RGB + 快捷色）──
+// 元素 id 加 mp 前缀，避免与灯效页的 cp* 冲突（两页可能同时存在于 DOM）。
+function musicPickerHtml() {
+  const locked = MUS.style === 'fire';                 // 火焰火色内置锁定：调色盘置灰不可改色
+  const dis = locked ? ' disabled' : '';
+  const hex = MUS.single;
+  const [r, g, b] = musHexToRgb(hex);
+  const [hh, ss, vv] = MUS.singleHsv || musRgbToHsv(r, g, b);
+  const presets = CP_PRESETS.map(p =>
+    `<button type="button" class="cp-preset${hex.toLowerCase() === p.hex.toLowerCase() ? ' on' : ''}"` +
+    ` data-mp="${p.hex}" style="background:${p.hex}" title="${p.name}"${dis}></button>`).join('');
+  return `
+    <div class="cp cp-music${locked ? ' cp-locked' : ''}">
+      <div>
+        <div class="cp-sv" id="mpSV" style="background:hsl(${hh},100%,50%)">
+          <div class="cp-sv-white"></div><div class="cp-sv-black"></div>
+          <div class="cp-sv-dot" id="mpSVDot" style="left:${ss * 100}%;top:${(1 - vv) * 100}%"></div>
+        </div>
+      </div>
+      <div class="cp-hue" id="mpHue">
+        <div class="cp-hue-dot" id="mpHueDot" style="top:${(hh / 360) * 100}%"></div>
+      </div>
+      <div class="cp-side">
+        <div class="cp-preview">
+          <div class="cp-swatch" id="mpSwatch" style="background:${hex}"></div>
+          <input class="cp-hex" id="mpHex" value="${hex}" spellcheck="false" title="十六进制颜色值"${dis}>
+        </div>
+        <div class="cp-rgb">
+          <span>R</span><input type="range" id="mpR" min="0" max="255" value="${r}"${dis}>
+          <input type="number" id="mpRn" min="0" max="255" value="${r}"${dis}>
+          <span>G</span><input type="range" id="mpG" min="0" max="255" value="${g}"${dis}>
+          <input type="number" id="mpGn" min="0" max="255" value="${g}"${dis}>
+          <span>B</span><input type="range" id="mpB" min="0" max="255" value="${b}"${dis}>
+          <input type="number" id="mpBn" min="0" max="255" value="${b}"${dis}>
+        </div>
+        <div class="cp-presets">${presets}</div>
+      </div>
+    </div>`;
+}
+
+// 原位刷新调色盘（拖拽时不整块重绘，否则 pointer 捕获会丢）
+function updateMusicPicker() {
+  const hex = MUS.single;
+  const [r, g, b] = musHexToRgb(hex);
+  const [hh, ss, vv] = MUS.singleHsv || musRgbToHsv(r, g, b);
+  const sw = $('mpSwatch'); if (sw) sw.style.background = hex;
+  const pv = $('musColorPreview');
+  if (pv) { pv.classList.remove('lt-multi'); pv.style.background = hex; pv.title = '单色：使用调色盘当前颜色'; }
+  const hx = $('mpHex'); if (hx && document.activeElement !== hx) hx.value = hex;
+  const sv = $('mpSV'); if (sv) sv.style.background = `hsl(${hh},100%,50%)`;
+  const dot = $('mpSVDot');
+  if (dot) { dot.style.left = (ss * 100) + '%'; dot.style.top = ((1 - vv) * 100) + '%'; }
+  const hd = $('mpHueDot'); if (hd) hd.style.top = ((hh / 360) * 100) + '%';
+  for (const [rid, nid, v] of [['mpR', 'mpRn', r], ['mpG', 'mpGn', g], ['mpB', 'mpBn', b]]) {
+    const ri = $(rid), ni = $(nid);
+    if (ri && document.activeElement !== ri) ri.value = v;
+    if (ni && document.activeElement !== ni) ni.value = v;
+  }
+  const pr = host => host && host.querySelectorAll
+    ? host.querySelectorAll('.cp-preset').forEach(el =>
+        el.classList.toggle('on', String(el.dataset.mp).toLowerCase() === hex.toLowerCase()))
+    : null;
+  pr($('musParams'));
+}
+
+function syncMusicModeButtons() {
+  const single = MUS.colorMode === 'single';
+  const m = $('musColorMulti'), s = $('musColorSingle');
+  if (m) m.classList.toggle('on', !single);
+  if (s) s.classList.toggle('on', single);
+  const hint = $('mpHint');
+  if (hint) hint.textContent = MUS_HINT[single ? 'single' : 'multi'];
+}
+
+const MUS_HINT = {
+  single: '单色：整个键盘同一色相；无线下整屏只需 1 段，刷新更跟手。',
+  multi: '混色：色相随列位置与时间变化。直接取色会自动切到「单色」。',
+  fire: '火焰：火色内置锁定（橙焰金核），调色盘不可用；亮度/灵敏度照常。',
+};
+
+// 取色即视为要单色（与灯效页 ensureSingleColor 的行为一致）
+function setMusicSingle(hex, opts = {}) {
+  const switched = MUS.colorMode !== 'single';
+  MUS.colorMode = 'single';
+  MUS.single = hex;
+  MUS.singleHsv = musRgbToHsv(...musHexToRgb(hex));
+  if (opts.full) renderMusicParams();
+  else { syncMusicModeButtons(); updateMusicPicker(); }
+  if (switched && opts.log !== false) Leobog.log('渲染方式：单色（取色自动切换）', 'ok');
+}
+function setMusicSingleHsv(h, s, v) {
+  const [r, g, b] = musHsvToRgb(h, s, v);
+  setMusicSingle(musRgbToHex(r, g, b), { log: false });
+  MUS.singleHsv = [h, s, v];                              // 保留拖拽源，避免来回换算导致点位漂移
+}
+
+// PS 调色盘交互：SV / 色相条拖拽走 HSV 源状态；RGB / Hex / 快捷色走 hex
+function bindMusicPicker() {
+  const sv = $('mpSV'), hue = $('mpHue');
+  if (!sv || !hue || !sv.getBoundingClientRect) return;
+  if (!MUS.singleHsv) MUS.singleHsv = musRgbToHsv(...musHexToRgb(MUS.single));
+  const svPos = e => {
+    const r = sv.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    const y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+    setMusicSingleHsv(MUS.singleHsv[0], x, 1 - y);
+  };
+  const huePos = e => {
+    const r = hue.getBoundingClientRect();
+    const y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+    setMusicSingleHsv(y * 360, MUS.singleHsv[1] || 1, MUS.singleHsv[2] || 1);
+  };
+  const drag = (el, fn) => {
+    let on = false;
+    el.addEventListener('pointerdown', e => { on = true; el.setPointerCapture?.(e.pointerId); fn(e); e.preventDefault(); });
+    el.addEventListener('pointermove', e => { if (on) fn(e); });
+    el.addEventListener('pointerup', () => { on = false; });
+    el.addEventListener('pointercancel', () => { on = false; });
+  };
+  drag(sv, svPos);
+  drag(hue, huePos);
+  const rgbNow = () => ['mpR', 'mpG', 'mpB'].map(id => { const el = $(id); return el ? Number(el.value) : 0; });
+  for (const id of ['mpR', 'mpG', 'mpB']) {
+    const el = $(id);
+    if (el) el.addEventListener('input', () => setMusicSingle(musRgbToHex(...rgbNow()), { log: false }));
+  }
+  const clamp255 = x => Math.max(0, Math.min(255, Number(x) | 0));
+  const numNow = () => ['mpRn', 'mpGn', 'mpBn'].map(id => { const el = $(id); return el ? clamp255(el.value) : 0; });
+  for (const id of ['mpRn', 'mpGn', 'mpBn']) {
+    const el = $(id);
+    if (el) el.addEventListener('change', () => {
+      setMusicSingle(musRgbToHex(...numNow()), { log: false });
+      const [r2, g2, b2] = musHexToRgb(MUS.single);
+      [['mpRn', r2], ['mpGn', g2], ['mpBn', b2]].forEach(([nid, v]) => {
+        const n = $(nid); if (n) n.value = v;          // 越界输入（如 300）回写成钳制后的值
+      });
+      updateMusicPicker();
+    });
+  }
+  const hx = $('mpHex');
+  if (hx) hx.addEventListener('change', () => {
+    let v = hx.value.trim().replace(/^#/, '');
+    if (/^[0-9a-fA-F]{3}$/.test(v)) v = v.split('').map(c => c + c).join('');
+    if (/^[0-9a-fA-F]{6}$/.test(v)) setMusicSingle('#' + v.toLowerCase(), { log: false });
+    else { hx.value = MUS.single; updateMusicPicker(); }   // 非法输入：回退成当前色
+  });
+  const host = $('musParams');
+  if (host && host.addEventListener) host.addEventListener('click', e => {
+    const pr = e.target.closest && e.target.closest('.cp-preset');
+    if (pr && pr.dataset.mp) setMusicSingle(pr.dataset.mp, { full: true, log: false });
+  });
+}
+
+// 右栏：渲染方式（混色/单色）、调色盘、亮度 5 档、灵敏度 + 自动增益
+function renderMusicParams() {
+  const host = $('musParams');
+  if (!host) return;
+  const single = MUS.colorMode === 'single';
+  const hex = MUS.single;
+  const locked = MUS.style === 'fire';                 // 火焰：渲染方式行 + 调色盘一并置灰锁死
+  const dis = locked ? ' disabled' : '';
+  host.innerHTML = `
+    <div class="cp-tools${locked ? ' cp-locked' : ''}" style="padding:0;border:0;margin:0">
+      <div class="cp-tools-h">渲染方式</div>
+      <div class="cp-multi-row">
+        <button type="button" id="musColorMulti" class="${single ? '' : 'on'}"${dis}>混色</button>
+        <button type="button" id="musColorSingle" class="${single ? 'on' : ''}"${dis}>单色</button>
+        ${single ? `<span class="lt-preview" id="musColorPreview" style="background:${hex}" title="单色：使用调色盘当前颜色"></span>`
+                 : `<span class="lt-preview lt-multi" id="musColorPreview" title="混色：颜色随列与时间变化"></span>`}
+      </div>
+    </div>
+    ${musicPickerHtml()}
+    <div class="muted cp-hint" id="mpHint">${MUS_HINT[MUS.style === 'fire' ? 'fire' : (single ? 'single' : 'multi')]}</div>
+    <div class="lt-sliders" style="margin-top:12px">
+      <label class="lt-slider">亮度
+        <input type="range" id="musLevel" min="0" max="4" step="1" value="${MUS.level}">
+        <span class="lt-val" id="musLevelVal">${MUS.level}</span></label>
+      <label class="lt-slider">灵敏度
+        <input type="range" id="musGain" min="0.4" max="3" step="0.1" value="${MUS.gainManual}"${MUS.autoGain ? ' disabled' : ''}>
+        <span class="lt-val" id="musGainVal">${MUS.autoGain ? '自动' : MUS.gainManual.toFixed(1)}</span></label>
+    </div>
+    <div class="cs-bar">
+      <button type="button" id="musAutoGain" class="${MUS.autoGain ? 'on' : ''}">自动增益</button>
+      <span class="muted">${MUS.autoGain
+        ? '逐帧实时跟随音源峰值，当前 <b id="musAutoGainVal">×' + MUS.autoGainValue.toFixed(1) + '</b>；手动灵敏度失效。'
+        : '开启后逐帧按音源峰值自动换算灵敏度，不同音源音量不用手调。'}</span>
+    </div>`;
+  bindMusicPicker();
+}
+
 function musicGain() {
   const el = $('musGain');
-  return el ? Number(el.value) || 1 : 1;
+  const v = el ? Number(el.value) : NaN;
+  if (Number.isFinite(v) && v > 0) MUS.gainManual = v;   // 记住手动值，控件重建后仍可用
+  return MUS.gainManual || 1;
 }
 
 async function startMusic() {
@@ -2425,7 +3082,7 @@ async function startMusic() {
     session.ctx = ctx;
     const srcNode = ctx.createMediaStreamSource(stream);
     const an = ctx.createAnalyser();
-    an.fftSize = 512; an.smoothingTimeConstant = 0.6;
+    an.fftSize = 512; an.smoothingTimeConstant = 0.05; // 少量平滑抑制单 bin 抖动；鼓点检测靠帧间增量，不需要重平滑
     srcNode.connect(an);
     // 音频线程时钟兼顾后台；data: 模块同时支持 file:// 与 localhost。
     const WL_SRC = 'class C extends AudioWorkletProcessor{process(){this.port.postMessage(1);return true}}registerProcessor("clock",C);';
@@ -2438,11 +3095,17 @@ async function startMusic() {
     session.proc = node;
     const mute = ctx.createGain(); mute.gain.value = 0;
     node.connect(mute); mute.connect(ctx.destination);
+    // ⚠️ analyser 必须有下游连到 destination，音频图才会被渲染、频谱才会持续更新。
+    //   之前 srcNode→analyser 是末端（无下游），AudioContext 不渲染这条链 → 频谱冻结，
+    //   只在前几帧有数据 → "刚切过去闪两下就停"。连到同一个 mute（增益 0，不发声）即可驱动。
+    an.connect(mute);
     node.port.onmessage = () => { if (MUS.session === session && MUS.on) musicTick(); };
     MUS.proc = node; MUS.ctx = ctx; MUS.analyser = an; MUS.stream = stream;
     MUS.on = true; MUS.starting = false;
-    MUS.freq = new Uint8Array(an.frequencyBinCount); MUS.buf = new Uint8Array(378);
+    MUS.freq = new Uint8Array(an.frequencyBinCount); MUS.time = new Uint8Array(an.fftSize); MUS.buf = new Uint8Array(378);
     MUS.last = 0; MUS.inflight = false; MUS.lastSend = 0; MUS.lastKeep = 0; MUS.lastChunk = 0;
+    MUS.peak = new Float32Array(MUS_COLS); MUS.lastNow = 0;
+    musFeatInit();
     MUS.wlFrames = null; MUS.wlIdx = 0; MUS.armed = session.channel !== 'wireless';
     updatePreview();
     musicPreviewHint();
@@ -2479,58 +3142,78 @@ async function startMusic() {
   }
 }
 
-// 全量快照 → 单一数据报字节流（官方语义：每周期发全部点亮槽，未列出的槽=熄灭）
-// 官方每周期=单一数据报连续分片，block=片数（固件收齐才整屏应用）。
-// V2 渐变 21 列逐列异色 ≈210B 超出官方 7 片包络 → 剔短列=黑块来源。
-// 对策：无线编码色相量化到 45° 桶（8 色）让邻列合并成大段；预算 168B（12 片）满屏不裁剪。
-const MUS_CYCLE_MAX = 168;                          // 12 片 × 14B（>官方7片包络；用户实测满屏不裁剪、无异常）
+// 全量快照 → 单一数据报字节流（每周期发全部点亮槽，未列出的槽=熄灭）
+// 无线 0x88 每周期 = 一条数据报连续分片，固件收齐才整屏应用。
+//
+// 预算口径（据 2026-10-24 webcap 抓包 + 实机试用，非官方文档）：
+//   抓包里我方音乐快照是 1..5 片、最多 70B（静音时只有 1–2 列亮）；
+//   168B = 12 片 × 14B 是按"满屏 15 列逐列异色"倒推的经验上限。
+//   旧注释里的"官方 7 片包络"在 docs/ 与 capture/ 均查不到出处，勿再当事实引用。
+//   真正的成本是段数：一段 = 4B 头 + 槽数，只有"相邻且同色"的列才会合并。
+const MUS_CYCLE_MAX = 168;                          // 12 片 × 14B（理论经验上限，见上）
+const MUS_CYCLE_SAFE = 154;                         // 11 片 × 14B 发送安全线：留 1 片余量（测试断言片数 ≤ 11）
+
+function rgb2hsl(r, g, b) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  const l = (mx + mn) / 510;
+  if (!d) return [0, 0, l];
+  const s = l > 0.5 ? d / (510 - mx - mn) : d / (mx + mn);
+  let h;
+  if (mx === r) h = ((g - b) / d + 6) % 6;
+  else if (mx === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return [h * 60, s, l];
+}
+
+// 色相量化只在**超预算**时兜底：保留 S/L，所以亮度不会像旧版那样被抹平成 l=0.55。
+function quantizeHue(r, g, b) {
+  const [h, s, l] = rgb2hsl(r, g, b);
+  if (!s) return [r, g, b];
+  return hsl2rgb(Math.round(h / 45) * 45 % 360, s, l);
+}
+
+// 逐槽扫描成段：相邻同色的槽合并成一段（可跨列），所以柱状图每列 1 段，
+// 整屏单色恰好 1 段。段数 = 帧成本，也是"超预算"的唯一来源。
+function musicSegments(buf, quant) {
+  const segs = [];
+  for (let c = 0; c < MUS_COLS; c++) {
+    for (let row = 0; row < MUS_ROWS; row++) {
+      const sl = c * MUS_ROWS + row;
+      const r0 = buf[sl * 3], g0 = buf[sl * 3 + 1], b0 = buf[sl * 3 + 2];
+      if (!r0 && !g0 && !b0) continue;
+      const [r, g, b] = quant ? quantizeHue(r0, g0, b0) : [r0, g0, b0];
+      const last = segs[segs.length - 1];
+      if (last && last.r === r && last.g === g && last.b === b) last.slots.push(sl);
+      else segs.push({ r, g, b, slots: [sl] });
+    }
+  }
+  return segs;
+}
 
 function musicSnapshotData(buf) {
-  const COLS = 21, ROWS = 6;
-  const cols = [];
-  for (let c = 0; c < COLS; c++) {
-    const slots = [];
-    let r = 0, g = 0, b = 0;
-    for (let row = 0; row < ROWS; row++) {
-      const sl = c * ROWS + row;
-      if (buf[sl * 3] || buf[sl * 3 + 1] || buf[sl * 3 + 2]) {
-        slots.push(sl);
-        if (slots.length === 1) { r = buf[sl * 3]; g = buf[sl * 3 + 1]; b = buf[sl * 3 + 2]; }
-      }
+  let data = encodeTlv(musicSegments(buf, false));                   // 先原样发：颜色与亮度都不动
+  if (data.length <= MUS_CYCLE_SAFE) return data;
+  data = encodeTlv(musicSegments(buf, true));                        // 只并色相（保留 S/L）
+  if (data.length <= MUS_CYCLE_SAFE) return data;
+  // 仍超预算：按列从短到长整列剔掉（正常效果不应触发）
+  const order = [];
+  for (let c = 0; c < MUS_COLS; c++) {
+    let n = 0;
+    for (let row = 0; row < MUS_ROWS; row++) {
+      const sl = c * MUS_ROWS + row;
+      if (buf[sl * 3] || buf[sl * 3 + 1] || buf[sl * 3 + 2]) n++;
     }
-    if (!slots.length) continue;
-    // 色相量化（仅无线编码；有线整帧原样发送不受影响）
-    let h = 0;
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    if (mx !== mn) {
-      if (mx === r) h = ((g - b) / (mx - mn) + 6) % 6;
-      else if (mx === g) h = (b - r) / (mx - mn) + 2;
-      else h = (r - g) / (mx - mn) + 4;
-      h *= 60;
-    }
-    [r, g, b] = hsl2rgb(Math.round(h / 45) * 45 % 360, 1, 0.55);
-    cols.push({ r, g, b, slots });
+    order.push([n, c]);
   }
-  const encode = list => {
-    const segs = [];
-    for (const col of list) {
-      const last = segs[segs.length - 1];
-      if (last && last.r === col.r && last.g === col.g && last.b === col.b) last.slots.push(...col.slots);
-      else segs.push({ r: col.r, g: col.g, b: col.b, slots: col.slots.slice() });
+  order.sort((a, b) => a[0] - b[0]);
+  const work = buf.slice();                                          // 不改调用方的帧
+  for (const [, c] of order) {
+    for (let row = 0; row < MUS_ROWS; row++) {
+      const sl = c * MUS_ROWS + row;
+      work[sl * 3] = 0; work[sl * 3 + 1] = 0; work[sl * 3 + 2] = 0;
     }
-    return encodeTlv(segs);
-  };
-  let data = encode(cols);
-  if (data.length > MUS_CYCLE_MAX) {
-    // 极端爆音仍超预算：从最短列开始剔除（正常音量不应触发）
-    const byLen = cols.slice().sort((a, b) => a.slots.length - b.slots.length);
-    for (const col of byLen) {
-      const idx = cols.indexOf(col);
-      if (idx < 0) continue;
-      cols.splice(idx, 1);
-      data = encode(cols);
-      if (data.length <= MUS_CYCLE_MAX) break;
-    }
+    data = encodeTlv(musicSegments(work, true));
+    if (data.length <= MUS_CYCLE_SAFE) break;
   }
   return data;
 }
@@ -2572,9 +3255,10 @@ function musicTick() {
     return;
   }
   if (Leobog.ioPending) return;
-  MUS.analyser.getByteFrequencyData(MUS.freq);
-  renderMusicBands(MUS.freq, MUS.buf, musicGain());
   const now = performance.now();
+  MUS.analyser.getByteFrequencyData(MUS.freq);
+  MUS.analyser.getByteTimeDomainData(MUS.time);   // 示波器/心跳电波背景走时域波形
+  musicRender(now);
   if (S.channel === 'wired') {
     if (now - MUS.last < 21) return;                   // 整帧 ~47fps（官方20fps 上限内）
     MUS.last = now;
@@ -2645,6 +3329,8 @@ function stopMusic({ flush = true } = {}) {
   releaseMusicResources(resources);
   MUS.ctx = null; MUS.analyser = null; MUS.stream = null; MUS.proc = null;
   MUS.wlFrames = null; MUS.wlIdx = 0; MUS.inflight = false; MUS.armed = false;
+  MUS.lastNow = 0; if (MUS.peak) MUS.peak.fill(0);
+  musFeatInit();
   MUS.preview = null; MUS.wlPreview = null;
   updatePreview();
   musicPreviewHint();
@@ -2662,7 +3348,44 @@ window.addEventListener('pagehide', () => stopMusic({ flush: false }));
 
 $('musStart').onclick = startMusic;
 $('musStop').onclick = () => { stopMusic(); Leobog.log('音乐律动已停止', 'ok'); };
-$('musGain').oninput = () => { $('musGainVal').textContent = Number($('musGain').value).toFixed(1); };
+renderMusicStyles();
+renderMusicParams();
+
+const musStylesHost = $('musStyles');
+if (musStylesHost) musStylesHost.onclick = e => {
+  const btn = e.target.closest('button[data-style]');
+  if (btn) setMusicStyle(btn.dataset.style);
+};
+
+// 参数区是动态重建的，事件用委托，避免重建后绑定丢失
+const musParamsHost = $('musParams');
+if (musParamsHost) {
+  musParamsHost.addEventListener?.('input', e => {
+    const it = e.target;
+    if (it.id === 'musLevel') {
+      MUS.level = Math.max(0, Math.min(4, Number(it.value) || 0));
+      const v = $('musLevelVal'); if (v) v.textContent = MUS.level;
+    } else if (it.id === 'musGain') {
+      MUS.gainManual = Number(it.value) || 1;
+      const v = $('musGainVal'); if (v) v.textContent = MUS.gainManual.toFixed(1);
+    }
+  });
+  musParamsHost.addEventListener?.('click', e => {
+    if (e.target.closest('#musColorMulti')) {
+      MUS.colorMode = 'multi'; MUS.singleHsv = null; renderMusicParams(); return;
+    }
+    if (e.target.closest('#musColorSingle')) {
+      MUS.colorMode = 'single'; MUS.singleHsv = musRgbToHsv(...musHexToRgb(MUS.single));
+      renderMusicParams(); return;
+    }
+    if (e.target.closest('#musAutoGain')) {
+      MUS.autoGain = !MUS.autoGain;
+      if (MUS.autoGain) MUS.peakAuto = 0.5;      // 重新起算，避免带着旧的峰值
+      renderMusicParams();
+      Leobog.log('自动增益：' + (MUS.autoGain ? '开' : '关'), 'ok');
+    }
+  });
+}
 
 // 网页侧帧录制（B端对照；停止时自动下载日志）
 $('capStart').onclick = () => {
@@ -3929,7 +4652,7 @@ $('restoreFile').onchange = async e => {
   await applyAll({ skipConfirm: true });
 };
 
-// ── 恢复出厂（固件镜像：设置块 @C400 + Win 键表四页，data/factory.js）────
+// ── 恢复出厂（固件镜像：设置块 @C400 + Win 键表四页，data/models/*.js 的 factory）────
 $('factoryBtn').onclick = async () => {
   if (applying || !canWriteConfiguration()) return;
   const mod = window.LEOBOG_MODELS && window.LEOBOG_MODELS[S.modelName];
