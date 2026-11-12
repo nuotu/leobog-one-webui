@@ -2264,6 +2264,7 @@ const MUS = { on: false, starting: false, session: null, ctx: null, analyser: nu
               proc: null, last: 0, inflight: false, lastSend: 0, lastKeep: 0, lastChunk: 0,
               wlFrames: null, wlIdx: 0, armed: false, preview: null, wlPreview: null,
               style: 'bars', peak: null, time: null, lastNow: 0,
+              screenGrid: null, screenT: 0, screenCv: null, screenCtx: null,  // 屏幕镜像：10fps 采样网格/超采样画布
               feat: null,                                              // 公共特征（见 musFeatures）
               level: 4, colorMode: 'multi', single: '#66ccff', singleHsv: null,  // 亮度档 0..4 / 混色|单色 / 单色色值(HSV 为拖拽源)
               autoGain: true, gainManual: 1, peakAuto: 0.5, autoGainValue: 1, lastGainUI: 0 };
@@ -2302,12 +2303,14 @@ function releaseMusicResources(session) {
   for (const [track, fn] of session.trackEnds || []) track.removeEventListener?.('ended', fn);
   session.trackEnds = [];
   const { proc, stream, ctx } = session;
-  session.proc = null; session.stream = null; session.ctx = null;
+  const video = session.video;
+  session.proc = null; session.stream = null; session.ctx = null; session.video = null;
   if (proc) {
     if (proc.port) proc.port.onmessage = null;
     try { proc.disconnect(); } catch (e) {}
   }
   if (stream) stream.getTracks().forEach(t => t.stop());
+  if (video) { try { video.srcObject = null; } catch (e) {} }
   if (ctx) ctx.close().catch(() => {});
 }
 
@@ -2742,6 +2745,92 @@ function renderMusicPart(freq, buf, opt) {
   }
 }
 
+// ── 屏幕镜像：把共享画面的中段横带显示在键盘上（有线 30fps / 无线 10fps），作为律动效果之一 ──
+// 画面源复用律动启动的同一条共享流（getDisplayMedia 视频轨），跟律动同启停。
+// 有线全彩直通：378B 裸帧无段数预算，90 格逐格原样（这块 15×6 硬件的清晰度上限）；
+// 无线只有段数预算（154B≈16 段）→ 预算拟合降色（musMirrorPaint）。两通道画质有意不同。
+const MUS_SCREEN_FPS_WIRED = 30;    // 有线采样帧率：全帧直通，放开到 30fps 求流畅
+const MUS_SCREEN_FPS_WL = 10;       // 无线采样帧率：10fps（链路吞吐本身 10~20fps，取稳）
+const MUS_SCREEN_SS = 2;            // 超采样倍数：先画 2 倍小图再盒式均值，压 15×6 缩略的闪烁走样
+
+// 中段横带裁切：保持 15:6 键盘宽高比居中取带（宽屏裁上下、窄长屏裁左右）
+function musScreenBand(W, H) {
+  const ar = MUS_COLS / MUS_ROWS;
+  if (W / H > ar) { const sh = H, sw = H * ar; return [(W - sw) / 2, 0, sw, sh]; }
+  const sw = W, sh = W / ar; return [0, (H - sh) / 2, sw, sh];
+}
+
+// 分通道采样：视频帧 → 中段横带 → 超采样小图 → 盒式均值 → 15×6 RGB 网格（MUS.screenGrid）
+function musScreenSample(now) {
+  const v = MUS.session && MUS.session.video;
+  if (!v || !v.videoWidth || v.readyState < 2) return false;
+  const fps = S.channel === 'wired' ? MUS_SCREEN_FPS_WIRED : MUS_SCREEN_FPS_WL;
+  if (MUS.screenT && now - MUS.screenT < 1000 / fps) return true;
+  MUS.screenT = now;
+  const cv = MUS.screenCv || (MUS.screenCv = document.createElement('canvas'));
+  const N = MUS_COLS * MUS_SCREEN_SS, M = MUS_ROWS * MUS_SCREEN_SS;
+  if (cv.width !== N) { cv.width = N; cv.height = M; }
+  const g2 = MUS.screenCtx || (MUS.screenCtx = cv.getContext('2d'));
+  g2.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in g2) g2.imageSmoothingQuality = 'high';
+  const [sx, sy, sw, sh] = musScreenBand(v.videoWidth, v.videoHeight);
+  g2.drawImage(v, sx, sy, sw, sh, 0, 0, N, M);
+  const px = g2.getImageData(0, 0, N, M).data;
+  const grid = MUS.screenGrid || (MUS.screenGrid = new Uint8Array(MUS_COLS * MUS_ROWS * 3));
+  const k = MUS_SCREEN_SS * MUS_SCREEN_SS;
+  for (let c = 0; c < MUS_COLS; c++) for (let r = 0; r < MUS_ROWS; r++) {
+    let R = 0, G = 0, B = 0;
+    for (let dy = 0; dy < MUS_SCREEN_SS; dy++) for (let dx = 0; dx < MUS_SCREEN_SS; dx++) {
+      const i = (((r * MUS_SCREEN_SS + dy) * N) + (c * MUS_SCREEN_SS + dx)) * 4;
+      R += px[i]; G += px[i + 1]; B += px[i + 2];
+    }
+    const o = (c * MUS_ROWS + r) * 3;
+    grid[o] = Math.round(R / k); grid[o + 1] = Math.round(G / k); grid[o + 2] = Math.round(B / k);
+  }
+  return true;
+}
+
+// 预算拟合：贪心把相邻相近色并成一段（色差容限逐级放宽），段数塞进无线安全线才画。
+// 容限拉满必成 1 段、恒有解；段色取段内均值。仅无线路径走这里（有线全帧直通不量化）。
+function musMirrorPaint(grid, buf) {
+  buf.fill(0);
+  const N = MUS_COLS * MUS_ROWS;
+  for (const tol of [0, 6, 12, 22, 36, 56, 84, 120, 170, 255]) {
+    const runs = [];
+    for (let i = 0; i < N; i++) {
+      const r = grid[i * 3], g = grid[i * 3 + 1], b = grid[i * 3 + 2];
+      const last = runs[runs.length - 1];
+      if (last && last.n < 255) {
+        const d = (Math.abs(r - last.r / last.n) + Math.abs(g - last.g / last.n) + Math.abs(b - last.b / last.n)) / 3;
+        if (d <= tol) { last.r += r; last.g += g; last.b += b; last.n++; continue; }
+      }
+      runs.push({ r, g, b, n: 1, i0: i });
+    }
+    if (4 * runs.length + N > MUS_CYCLE_SAFE) continue;
+    for (const run of runs) {
+      const cr = Math.round(run.r / run.n), cg = Math.round(run.g / run.n), cb = Math.round(run.b / run.n);
+      for (let i = run.i0; i < run.i0 + run.n; i++) {
+        buf[i * 3] = cr; buf[i * 3 + 1] = cg; buf[i * 3 + 2] = cb;
+      }
+    }
+    return;
+  }
+}
+
+// 屏幕镜像：颜色来自画面本身（取色/增益不参与），亮度档仍由 musicRender 统一缩放。
+// 有线（S.channel='wired'）发全帧裸数据 → 90 格逐格原样直通；无线走预算拟合降色。
+function renderMusicScreen(freq, buf, opt) {
+  musScreenSample(opt.now);
+  const g = MUS.screenGrid;
+  if (!g) { buf.fill(0); return; }
+  if (S.channel === 'wired') {
+    buf.fill(0);
+    buf.set(g);                     // 槽 0..89 逐格原样，槽 90+ 保持清零
+    return;
+  }
+  musMirrorPaint(g, buf);
+}
+
 // ── 律动效果表：每个效果只负责把 freq 画进 378B 帧缓冲（槽 col*6+row）──
 // 无线下"段数"就是帧成本：整屏同色 1 段，逐列异色最多 15 段（10fps）。
 // 顺序即按钮顺序；bars 放第一个（默认效果，也是"频谱"基准）
@@ -2756,6 +2845,7 @@ const MUS_STYLES = {
   grav:   { name: '重力坠落', render: renderMusicGrav },
   fire:   { name: '低频火焰', render: renderMusicFire },
   part:   { name: '粒子抛洒', render: renderMusicPart },
+  screen: { name: '屏幕镜像', render: renderMusicScreen },
 };
 
 function musicRender(now) {
@@ -2772,7 +2862,7 @@ function musicRender(now) {
     if (el) el.textContent = '×' + MUS.autoGainValue.toFixed(1);
   }
   const rgb = MUS.colorMode === 'single' ? musHexToRgb(MUS.single) : null;
-  const feat = musFeatures(gain, now, dt);                    // 一次分析，8 个效果共用
+  const feat = musFeatures(gain, now, dt);                    // 一次分析，9 个效果共用
   (MUS_STYLES[MUS.style] || MUS_STYLES.bars).render(MUS.freq, MUS.buf, { now, dt, gain, rgb, feat, time: MUS.time });
   const k = MUS_LEVELS[MUS.level];
   if (k < 1) for (let i = 0; i < MUS.buf.length; i++) MUS.buf[i] = Math.round(MUS.buf[i] * k);
@@ -2846,7 +2936,7 @@ function renderMusicStyles() {
 // ── 调色盘：与「键盘灯效」同款（SV 面板 + 色相条 + Hex/RGB + 快捷色）──
 // 元素 id 加 mp 前缀，避免与灯效页的 cp* 冲突（两页可能同时存在于 DOM）。
 function musicPickerHtml() {
-  const locked = MUS.style === 'fire';                 // 火焰火色内置锁定：调色盘置灰不可改色
+  const locked = MUS.style === 'fire' || MUS.style === 'screen';  // 火焰火色锁定 / 屏幕镜像颜色来自画面：调色盘置灰
   const dis = locked ? ' disabled' : '';
   const hex = MUS.single;
   const [r, g, b] = musHexToRgb(hex);
@@ -2921,6 +3011,7 @@ const MUS_HINT = {
   single: '单色：整个键盘同一色相；无线下整屏只需 1 段，刷新更跟手。',
   multi: '混色：色相随列位置与时间变化。直接取色会自动切到「单色」。',
   fire: '火焰：火色内置锁定（橙焰金核），调色盘不可用；亮度/灵敏度照常。',
+  screen: '屏幕镜像：显示共享画面的中段横带（有线 30fps 全彩直通 / 无线 10fps 预算降色）；颜色来自画面，参数仅亮度可调。',
 };
 
 // 取色即视为要单色（与灯效页 ensureSingleColor 的行为一致）
@@ -3002,8 +3093,10 @@ function renderMusicParams() {
   if (!host) return;
   const single = MUS.colorMode === 'single';
   const hex = MUS.single;
-  const locked = MUS.style === 'fire';                 // 火焰：渲染方式行 + 调色盘一并置灰锁死
+  const locked = MUS.style === 'fire' || MUS.style === 'screen';  // 火焰/屏幕镜像：渲染方式行 + 调色盘一并置灰锁死
   const dis = locked ? ' disabled' : '';
+  const gainLocked = MUS.style === 'screen';           // 屏幕镜像：灵敏度/自动增益也置灰，仅亮度可调
+  const gainDis = gainLocked ? ' disabled' : '';
   host.innerHTML = `
     <div class="cp-tools${locked ? ' cp-locked' : ''}" style="padding:0;border:0;margin:0">
       <div class="cp-tools-h">渲染方式</div>
@@ -3015,17 +3108,17 @@ function renderMusicParams() {
       </div>
     </div>
     ${musicPickerHtml()}
-    <div class="muted cp-hint" id="mpHint">${MUS_HINT[MUS.style === 'fire' ? 'fire' : (single ? 'single' : 'multi')]}</div>
+    <div class="muted cp-hint" id="mpHint">${MUS_HINT[MUS.style] || MUS_HINT[single ? 'single' : 'multi']}</div>
     <div class="lt-sliders" style="margin-top:12px">
       <label class="lt-slider">亮度
         <input type="range" id="musLevel" min="0" max="4" step="1" value="${MUS.level}">
         <span class="lt-val" id="musLevelVal">${MUS.level}</span></label>
-      <label class="lt-slider">灵敏度
-        <input type="range" id="musGain" min="0.4" max="3" step="0.1" value="${MUS.gainManual}"${MUS.autoGain ? ' disabled' : ''}>
+      <label class="lt-slider${gainLocked ? ' cp-locked' : ''}">灵敏度
+        <input type="range" id="musGain" min="0.4" max="3" step="0.1" value="${MUS.gainManual}"${MUS.autoGain || gainLocked ? ' disabled' : ''}>
         <span class="lt-val" id="musGainVal">${MUS.autoGain ? '自动' : MUS.gainManual.toFixed(1)}</span></label>
     </div>
-    <div class="cs-bar">
-      <button type="button" id="musAutoGain" class="${MUS.autoGain ? 'on' : ''}">自动增益</button>
+    <div class="cs-bar${gainLocked ? ' cp-locked' : ''}">
+      <button type="button" id="musAutoGain" class="${MUS.autoGain ? 'on' : ''}"${gainDis}>自动增益</button>
       <span class="muted">${MUS.autoGain
         ? '逐帧实时跟随音源峰值，当前 <b id="musAutoGainVal">×' + MUS.autoGainValue.toFixed(1) + '</b>；手动灵敏度失效。'
         : '开启后逐帧按音源峰值自动换算灵敏度，不同音源音量不用手调。'}</span>
@@ -3054,7 +3147,7 @@ async function startMusic() {
   $('musStart').disabled = true; $('musStop').disabled = false;
   musicAwakeHint('');
   let started = false;
-  Leobog.log('音乐律动：请求系统音频…请选择「整个屏幕」并勾选「共享系统音频」，不要选单个标签页');
+  Leobog.log('音乐律动：请求共享画面/音频…要系统声音请选「整个屏幕」并勾「共享系统音频」，只要某标签页声音选「标签页」并勾「共享标签页音频」；所选画面的中段横带会显示在键盘上（屏幕镜像）');
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
@@ -3065,10 +3158,22 @@ async function startMusic() {
       if (MUS.session === session) Leobog.log('音乐启动已取消：设备或配置写入状态已改变', 'warn');
       return;
     }
-    stream.getVideoTracks().forEach(t => t.stop());
+    // 视频轨保留给「屏幕镜像」效果（跟律动同启停）：画面只在本页渲染进键盘帧，不上传、不录制。
+    const vTracks = stream.getVideoTracks();
+    const video = document.createElement('video');
+    if (vTracks.length && video) {
+      video.muted = true; video.playsInline = true; video.srcObject = stream;
+      session.video = video;
+      try { Promise.resolve(video.play && video.play()).catch(() => {}); } catch (e) {}
+      for (const t of vTracks) {
+        const onEnd = () => { if (MUS.session === session) Leobog.log('画面共享已结束；音频仍在时律动继续', 'warn'); };
+        t.addEventListener?.('ended', onEnd);
+        session.trackEnds.push([t, onEnd]);
+      }
+    }
     const tracks = stream.getAudioTracks();
     if (!tracks.length || tracks.some(t => t.readyState === 'ended'))
-      throw new Error('没有拿到音频——请在共享弹窗里勾选「共享/Shares system audio」，并共享整个屏幕');
+      throw new Error('没有拿到音频——请在共享弹窗里勾选「共享系统音频」（屏幕/窗口）或「共享标签页音频」（标签页）');
     const onEnded = () => {
       if (MUS.session !== session) return;
       stopMusic();
@@ -3329,7 +3434,7 @@ function stopMusic({ flush = true } = {}) {
   releaseMusicResources(resources);
   MUS.ctx = null; MUS.analyser = null; MUS.stream = null; MUS.proc = null;
   MUS.wlFrames = null; MUS.wlIdx = 0; MUS.inflight = false; MUS.armed = false;
-  MUS.lastNow = 0; if (MUS.peak) MUS.peak.fill(0);
+  MUS.lastNow = 0; if (MUS.peak) MUS.peak.fill(0); MUS.screenT = 0; MUS.screenGrid = null;
   musFeatInit();
   MUS.preview = null; MUS.wlPreview = null;
   updatePreview();
