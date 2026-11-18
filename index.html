@@ -221,6 +221,24 @@
   .key.special { background: var(--key-special); }
   .key.empty { background: var(--key-empty); opacity: .6; }
   .key.sel { box-shadow: var(--shadow-key-hover); z-index: 3; }
+  /* 键盘右上角旋钮：中心显示当前模式符号，点击才展开旋钮槽 */
+  .kb-knob { position: absolute; border-radius: 50%; display: flex; align-items: center;
+             justify-content: center; cursor: pointer; z-index: 3; color: var(--key-fg);
+             font-size: 21px; line-height: 1; transition: box-shadow .12s; }
+  .kb-knob:hover { box-shadow: 0 0 0 2px var(--accent); }
+  .kb-knob.sel { box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-soft); }
+  .kb-knob .mode-symbol { pointer-events: none; }
+  /* 旋钮自定义：三个虚拟槽位，复用左侧绑定编辑器 */
+  .knob-row { margin: 0 0 10px; }
+  .knob-row[hidden] { display: none; }
+  .knob-slots { display: flex; gap: 6px; flex-wrap: wrap; }
+  .knob-slot { flex: 1 1 30%; min-width: 96px; text-align: left; padding: 6px 8px; margin: 0;
+               border: 1px solid var(--key-border); border-radius: 7px; background: var(--key-bg);
+               color: var(--key-fg); cursor: pointer; }
+  .knob-slot:hover { box-shadow: var(--shadow-key-hover); }
+  .knob-slot.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  .knob-slot .kn { display: block; font-size: 12px; font-weight: 600; }
+  .knob-slot .kb2 { display: block; font-size: 11px; color: var(--accent); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 自定义模式上色：键盘当画布，--cs = 该键当前色（选中=调色盘色 / 未选=黑） */
   /* 未选中 = 熄灭（0,0,0）；选中 = 点亮（当前色 + 同色辉光） */
   .kb.color-mode .key { background: var(--cs, #000); border-color: rgba(255,255,255,.10);
@@ -563,7 +581,7 @@
     <div class="side-foot">
       <a href="https://github.com/nuotu/leobog-one-webui" target="_blank"
          rel="noopener noreferrer" title="打开项目仓库">© nuotu</a>
-      <span class="side-version">v1.1.0</span>
+      <span class="side-version">v1.2.2</span>
     </div>
   </aside>
 
@@ -609,6 +627,9 @@
       <div class="pane on" id="pane-keys">
         <div class="pcol" style="flex:1.15">
           <div class="pcol-h">绑定类型</div>
+          <div class="knob-row" id="knobRow" hidden>
+            <div class="knob-slots" id="knobSlots"></div>
+          </div>
           <div class="pcol-body" id="kmEditor">
             <div class="ed-status muted">编辑 <b id="edKey">—</b> · 槽 <code id="edSlot">—</code> · 当前 <code id="edCur">—</code></div>
             <div class="ed-type" id="edTypeRow">
@@ -793,7 +814,7 @@
 <script src="data/audiobar.js"></script>
 <script src="protocol.js?v=1.0.3"></script>
 <script src="fw_preview.js?v=1.1.0"></script>
-<script src="app.js?v=1.1.0"></script>
+<script src="app.js?v=1.2.2"></script>
 <!-- 51.LA 访问统计（官方异步安装） -->
 <script>
 !function(p){"use strict";!function(t){var s=window,e=document,i=p,c="".concat("https:"===e.location.protocol?"https://":"http://","sdk.51.la/js-sdk-pro.min.js"),n=e.createElement("script"),r=e.getElementsByTagName("script")[0];n.type="text/javascript",n.setAttribute("charset","UTF-8"),n.async=!0,n.src=c,n.id="LA_COLLECT",i.d=n;var o=function(){s.LA.ids.push(i)};s.LA?s.LA.ids&&o():(s.LA=p,s.LA.ids=[],o()),r.parentNode.insertBefore(n,r)}()}({id:"3RlN1P6TKpDimbsy",ck:"3RlN1P6TKpDimbsy"});

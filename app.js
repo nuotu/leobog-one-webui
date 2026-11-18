@@ -143,6 +143,62 @@ const SPECIAL_ITEMS = [];
 for (const g of SPECIAL_GROUPS) for (const it of g.items)
   SPECIAL_ITEMS.push({ group: g.name, label: it[0], rec: it[1], tip: it[2] || it[0], warn: !!it[3] });
 
+// 旋钮自定义模式的三个虚拟键表槽（固件读取 CC00/D000/D400 的 65/71/6）
+const KNOB_SLOTS = [
+  { slot: 65, name: '旋钮短按' },
+  { slot: 71, name: '旋钮顺时针' },
+  { slot: 6,  name: '旋钮逆时针' },
+];
+const isKnobSlot = slot => KNOB_SLOTS.some(k => k.slot === slot);
+// 固件目前只对普通键/修饰键/组合键做输出叠加。
+const knobRecordSupported = rec => rec[0] === 0x00 || (rec[0] === 0x07 && rec[1] !== 0);
+// 固件版本能力表：只认 [25] 的精确值；未登记/未标记一律按基础版。
+// 固件版本与网页版本分开：0xB1 = 固件 v1.0；网页版本是 v1.2.X。
+//   0x00 未标记 / 0xA1 -> 基础版（不套 1.2.X）
+//   0xB1 -> 旋钮固件 v1.0；0xB2 起再登记后续固件版本。
+const FW_CAPS = new Map([
+  [0xA1, { label: '基础版', knob: false }],
+  [0xB1, { version: 'v1.0', label: '旋钮版', knob: true, lightingWebOnly: true, customGreen: true }],
+]);
+function fwTag() {
+  return S.settings && S.settings.length > 25 ? (Number(S.settings[25]) & 0xff) : 0;
+}
+function fwCap() {
+  return FW_CAPS.get(fwTag()) || { label: '基础版', knob: false };
+}
+function knobSupported() {
+  return S.modelName === 'Hi8' && fwCap().knob;
+}
+let lastFwLogKey = '';
+function logFwKind() {
+  if (!S.settings) return;
+  const tag = fwTag();
+  const cap = FW_CAPS.get(tag);
+  const key = tag + ':' + (cap ? cap.label : 'base');
+  if (key === lastFwLogKey) return;
+  lastFwLogKey = key;
+  let msg;
+  if (cap && cap.knob) msg = '固件：' + cap.version + ' ' + cap.label;
+  else if (cap) msg = '固件：基础版';
+  else if (tag === 0) msg = '固件：基础版（未标记）';
+  else msg = '固件：基础版（未登记）';
+  Leobog.log(`[固件] ${msg}（[25]=0x${tag.toString(16).padStart(2, '0')}）`, cap && cap.knob ? 'ok' : '');
+}
+
+// 旋钮中心显示当前模式符号：灯效/音量/自定义由版本能力决定是否渲染。
+const KNOB_MODE_STYLE = {
+  0: { sym: '♪', name: '音量模式' },
+  1: { sym: '✦', name: '灯效模式' },
+  2: { sym: '✎', name: '自定义模式' },
+};
+function knobModeInfo() {
+  const raw = S.settings ? Number(S.settings[26]) : 1;
+  return KNOB_MODE_STYLE[raw] || KNOB_MODE_STYLE[1];
+}
+function knobTitle(info) {
+  return S.modelName === 'Hi8' ? `旋钮：${info.name}；点击编辑自定义绑定` : `旋钮：${info.name}`;
+}
+
 // KeyboardEvent.code → HID usage（物理键捕获用；标准 HID 键盘页）
 const EV2USAGE = (() => {
   const m = {};
@@ -236,7 +292,7 @@ function decodeRecord(b, off = 0) {
     0x18: 'Windows',     // Fn+W
     0x19: 'Android',     // Fn+Q
     0x1a: 'Mac',         // Fn+E（Win/Alt 位置互换）
-    0x1d: '模式键',       // 旋钮键：灯效模式=短按循环 17 灯效、旋转调亮度；音量模式=短按静音、旋转调音量；长按切两种模式
+    0x1d: '模式键',       // 旋钮键：新版两模式=音量/自定义；音量模式短按静音、旋转调音量；长按切模式
   };
   // 键表 type 08 = 功能键：[1]=功能组、[2]=参数（01 增 / 02 减）
   // 实机确认（2026-11-01）：00=灯效切换\=、02=颜色切换 Tab、03=亮度↑↓、04=速度→←（01 增 / 02 减）
@@ -311,6 +367,7 @@ const S = {
   psd: null,
   curLayer: 0,
   sel: null,            // 编辑器当前槽位
+  knobOpen: false,      // 是否已点击右上角旋钮并展开旋钮槽
   kmDirty: [false, false, false, false],
   setDirty: false,
   setOps: [],           // 设置表单来源：[{key, row, fn(freshBlock)}]
@@ -862,6 +919,7 @@ async function afterModel() {
   stopMusic();                                 // 重读期间停流，避免和读命令抢通道
   // 重置编辑态（每次连接/换型后）
   S.settings = null; S.keymap = [null, null, null, null];
+  lastFwLogKey = '';
   S.color = null; S.colorBase = null; S.colorLoaded = false; S.ledBlock = null;
   S.kmDirty = [false, false, false, false];
   S.setOps = []; S.lightOps = []; S.lightSel = null; S.setDirty = false;
@@ -893,6 +951,7 @@ async function afterModel() {
     // 灯效页延后到色帧与 LED 参数块读取完成后再渲染，避免短暂误报“无可信色帧”。
   } catch (e) {
     S.settings = null;
+    lastFwLogKey = '';
     Leobog.log('设置读取失败：' + (e.message || e), 'bad');
     if ($('setKeys')) $('setKeys').innerHTML =
       `<span class="bad">设置读取失败：设备无响应。</span><br>` +
@@ -1081,10 +1140,20 @@ function renderSettings() {
   ].join('');
 
   // 中栏：设备行为
+  // 只有精确命中 0xB1 才显示旋钮扩展能力；其余值按基础版。
+  const knob = knobSupported();
+  const modeVals = knob
+    ? [[1, '灯效模式'], [0, '音量模式'], [2, '自定义模式']]
+    : [[1, '灯效模式'], [0, '音量模式']];
+  const rawMode = Number(p[26]);
+  const modeCur = modeVals.some(([v]) => v === rawMode) ? rawMode : 1;
+  const modeNote = knob
+    ? '设置旋钮灯效、音量、自定义模式；长按旋钮切换音量与自定义，灯效仅网页设置。'
+    : '设置旋钮灯效、音量模式；长按旋钮切换音量与灯效。';
+  if (!knob && S.knobOpen) { S.knobOpen = false; closeEditor(); }
   $('setDev').innerHTML = [
-    row('mode', '灯效 / 音量模式',
-      seg('mode', [[1, '灯效模式'], [0, '音量模式']], p[26]) + hidden('setMode', p[26]),
-      '决定旋钮用途：灯效模式调亮度，音量模式调音量。'),
+    row('mode', '旋钮模式',
+      seg('mode', modeVals, modeCur) + hidden('setMode', modeCur), modeNote, true),
     row('osmode', '系统模式',
       seg('osmode', [[0, 'Windows'], [1, 'Android'], [2, 'macOS']], p[27]) + hidden('setOsMode', p[27]),
       '决定 F 区与快捷键的映射，macOS 下左 Win 与左 Alt 互换。', true),
@@ -1103,6 +1172,8 @@ function renderSettings() {
   }
   updateSetReadouts();
   markDirtyRows();
+  updateKnobModeSymbol();
+  logFwKind();
 }
 
 // 滑杆/分段按钮 → 人话读数：Tap 阈值换算成时间，休眠档位换算成分秒
@@ -1162,7 +1233,7 @@ function collectSetOps() {
   if (modeEl) {
     const mode = Number(modeEl.value);
     if (Number.isInteger(mode) && mode !== p[26])
-      ops.push({ key: '灯效/音量模式', row: 'mode', fn: b => { b[26] = mode; } });
+      ops.push({ key: '旋钮模式', row: 'mode', fn: b => { b[26] = mode; } });
   }
   const osEl = $('setOsMode');
   if (osEl) {
@@ -3515,6 +3586,39 @@ $('capStop').onclick = () => {
 };
 
 // ── 键位图渲染（M HUB 风格：单位栅格观感 + SVG 底壳 + 旋钮装饰）──
+function knobSlotLabel(rec) {
+  if (!rec) return '未读取';
+  const d = decodeRecord(rec, 0);
+  return d.empty ? '未绑定' : d.label.replace('组合:', '');
+}
+
+// 三个旋钮槽复用左侧绑定编辑器；Tap 层不显示（固件不读 Tap 页）
+function renderKnobSlots() {
+  const row = $('knobRow'), host = $('knobSlots');
+  if (!row || !host) return;
+  const show = S.knobOpen && knobSupported() && S.section === 'keys' && S.curLayer >= 0 && S.curLayer <= 2;
+  row.hidden = !show;
+  const knobEl = document.querySelector('#keyboard .kb-knob');
+  if (knobEl) knobEl.classList.toggle('sel', show);
+  if (!show) return;
+  const buf = S.keymap[S.curLayer];
+  host.innerHTML = KNOB_SLOTS.map(k => {
+    const rec = buf ? Array.from(buf.subarray(k.slot * 4, k.slot * 4 + 4)) : null;
+    const label = knobSlotLabel(rec);
+    return `<button type="button" class="knob-slot${S.sel === k.slot ? ' sel' : ''}" data-slot="${k.slot}" data-name="${k.name}">` +
+      `<span class="kn">${k.name}</span><span class="kb2">${label}</span></button>`;
+  }).join('');
+}
+
+function updateKnobModeSymbol() {
+  const knob = document.querySelector('#keyboard .kb-knob');
+  if (!knob) return;
+  const info = knobModeInfo();
+  knob.title = knobTitle(info);
+  const sym = knob.querySelector('.mode-symbol');
+  if (sym) sym.textContent = info.sym;
+}
+
 function renderKeymap(layer) {
   const m = S.model;
   if (!m) return;
@@ -3578,6 +3682,12 @@ function renderKeymap(layer) {
     `</svg>`;
 
   let html = `<div class="kb" style="width:${W}px;height:${H}px">${caseSvg}`;
+  if (knobSupported()) {
+    const knobMode = knobModeInfo();
+    html += `<div class="kb-knob${S.knobOpen ? ' sel' : ''}" data-knob="1" title="${knobTitle(knobMode)}"
+      style="left:${knobX - KNOB_R}px;top:${knobY - KNOB_R}px;width:${2 * KNOB_R}px;height:${2 * KNOB_R}px">
+      <span class="mode-symbol">${knobMode.sym}</span></div>`;
+  }
   for (const k of vis) {
     const [x1, y1, x2, y2] = k.rect;
     let label = k.name, bind = '', cls = '';
@@ -3613,6 +3723,7 @@ function renderKeymap(layer) {
   $('keyboard').innerHTML = html;
   paintCustomKeys();                               // 若处于自定义上色模式，重绘后保留键色
   updatePreview();                                 // 音乐期间重建键帽后，继续绘制已发送的快照
+  renderKnobSlots();
   fitKeyboard();
 }
 
@@ -3640,6 +3751,7 @@ $('nav').onclick = e => {
   // 离开宏编辑时收起 104 选择器、停止录制，免得遮住其他页面 / 继续吞按键
   if (sec !== 'macro') { if (mpOpen) mpShow(false); macroRecStop(); }
   S.section = sec;
+  if (sec !== 'keys' && S.knobOpen) closeEditor();
   const layerSec = sec === 'keys' || sec === 'macro' || sec === 'settings';
   $('layerTabs').style.display = layerSec ? '' : 'none';
   if (S.model) {
@@ -3686,15 +3798,23 @@ window.addEventListener('resize', () => {
   window.__fitT = setTimeout(fitKeyboard, 120);
 });
 
-// 日志折叠：点击整个标题栏（含最新预览）展开/收起；操作区独立，不改变录制状态
-$('logHead').onclick = e => {
-  if (e.target.closest('.log-actions')) return; // 记录/下载等操作按钮不触发折叠
-  const collapsed = $('log').classList.toggle('collapsed');
+// 日志折叠：点击标题栏展开/收起；点击日志栏外部也收起
+function setLogCollapsed(collapsed) {
+  $('log').classList.toggle('collapsed', collapsed);
   $('logCopy').style.display = collapsed ? 'none' : '';
   $('logCapture').style.display = collapsed ? 'none' : '';
   $('selfTestBtn').style.display = collapsed && !hasSelfTestRecovery() ? 'none' : '';
   $('logLast').style.display = collapsed ? '' : 'none';
+}
+$('logHead').onclick = e => {
+  if (e.target.closest('.log-actions')) return; // 记录/下载等操作按钮不触发折叠
+  setLogCollapsed(!$('log').classList.contains('collapsed'));
 };
+document.addEventListener('click', e => {
+  if ($('log').classList.contains('collapsed')) return;
+  if (e.target.closest('#logbar')) return;
+  setLogCollapsed(true);
+});
 $('logCopy').onclick = async () => {
   const text = Array.from($('log').children).map(el => el.textContent).join('\n');
   try {
@@ -4023,6 +4143,10 @@ function factoryRecord(slot) {
 function stageRecord(rec, label) {
   const buf = S.keymap[S.curLayer];
   if (!buf || S.sel === null) return;
+  if (isKnobSlot(S.sel) && !knobRecordSupported(rec)) {
+    Leobog.log('旋钮自定义目前只支持普通键、修饰键和组合键；该类型没有写入', 'warn');
+    return;
+  }
   buf.set(rec, S.sel * 4);
   S.kmDirty[S.curLayer] = true;
   $('edCur').textContent = hexs(rec);
@@ -4030,7 +4154,7 @@ function stageRecord(rec, label) {
   renderKeymap(S.curLayer);
   updateDirtyUI();
   // 重绘后选中态丢失，恢复
-  document.querySelectorAll(`#keyboard .key[data-slot="${S.sel}"]`).forEach(x => x.classList.add('sel'));
+  document.querySelectorAll(`#keyboard .key[data-slot="${S.sel}"], #knobSlots .knob-slot[data-slot="${S.sel}"]`).forEach(x => x.classList.add('sel'));
 }
 
 function modBits() {
@@ -4137,14 +4261,40 @@ function setEditorEnabled(on) {
     if (el) el.classList.toggle('disabled', !on);
   });
   document.querySelectorAll('#edTypeRow button').forEach(b => { b.disabled = !on; });
+  if (on && isKnobSlot(S.sel)) {
+    // 旋钮槽的“默认键”和“空”等价，按需求置灰。
+    document.querySelectorAll('#edTypeRow button[data-type="special"], #edTypeRow button[data-type="macro"], #edTypeRow button[data-type="default"]')
+      .forEach(b => { b.disabled = true; });
+  }
+}
+
+function openKnobEditor() {
+  if (!knobSupported()) { Leobog.log('当前固件未标记为旋钮版，已隐藏旋钮功能', 'warn'); return; }
+  if (S.modelName !== 'Hi8') { Leobog.log('当前型号未支持旋钮自定义', 'warn'); return; }
+  if (S.curLayer === 3) { Leobog.log('Tap 层不适用旋钮自定义', 'warn'); return; }
+  if (!S.keymap[S.curLayer]) { Leobog.log('该层键表未读取，暂时无法编辑旋钮绑定', 'warn'); return; }
+  S.knobOpen = true;
+  S.sel = null;
+  document.querySelectorAll('#keyboard .key.sel, #knobSlots .knob-slot.sel').forEach(x => x.classList.remove('sel'));
+  $('edKey').textContent = '旋钮';
+  $('edSlot').textContent = '—';
+  $('edCur').textContent = '—';
+  $('edType').value = 'normal';
+  $('edUsage').value = '4';
+  setModBits(0);
+  setEditorEnabled(false);
+  syncEditorRows();
+  renderPalette();
+  renderKnobSlots();
 }
 
 function openEditor(slot, name) {
   const buf = S.keymap[S.curLayer];
   if (!buf) { Leobog.log('该层无实时键表数据，无法编辑；读取失败时会回退到出厂布局', 'warn'); return; }
   S.sel = slot;
-  document.querySelectorAll('#keyboard .key.sel').forEach(x => x.classList.remove('sel'));
-  document.querySelectorAll(`#keyboard .key[data-slot="${slot}"]`).forEach(x => x.classList.add('sel'));
+  S.knobOpen = isKnobSlot(slot);
+  document.querySelectorAll('#keyboard .key.sel, #knobSlots .knob-slot.sel').forEach(x => x.classList.remove('sel'));
+  document.querySelectorAll(`#keyboard .key[data-slot="${slot}"], #knobSlots .knob-slot[data-slot="${slot}"]`).forEach(x => x.classList.add('sel'));
   const rec = Array.from(buf.subarray(slot * 4, slot * 4 + 4));
   $('edKey').textContent = name;
   $('edSlot').textContent = slot;
@@ -4178,11 +4328,13 @@ function openEditor(slot, name) {
   }
   syncEditorRows();
   renderPalette();
+  renderKnobSlots();
 }
 
 function closeEditor() {
-  document.querySelectorAll('#keyboard .key.sel').forEach(x => x.classList.remove('sel'));
+  document.querySelectorAll('#keyboard .key.sel, #knobSlots .knob-slot.sel').forEach(x => x.classList.remove('sel'));
   S.sel = null;
+  S.knobOpen = false;
   $('edKey').textContent = '—';
   $('edSlot').textContent = '—';
   $('edCur').textContent = '—';
@@ -4192,6 +4344,7 @@ function closeEditor() {
   setEditorEnabled(false);
   syncEditorRows();
   renderPalette();
+  renderKnobSlots();
 }
 
 // 键盘区兜底：阻止原生文本选择（CSS 已禁用选中，这里再挡掉从边缘起手/双击选词等路径）
@@ -4453,16 +4606,32 @@ function releasePreviewKeys() {
 document.addEventListener('pointerup', () => { csDrag = null; releasePreviewKeys(); });
 document.addEventListener('pointercancel', releasePreviewKeys);
 
+$('knobSlots').onclick = e => {
+  const b = e.target.closest('.knob-slot');
+  if (!b) return;
+  const slot = Number(b.dataset.slot);
+  if (!Number.isInteger(slot)) return;
+  if (S.sel === slot) { closeEditor(); return; }
+  openEditor(slot, b.dataset.name || '');
+};
+
 $('keyboard').onclick = e => {
   if (S.section === 'music') return;                // 同步预览只读，不触发改键或灯效点击事件
   if (inCustomColorMode()) return;                  // 上色模式下点击=选色，不进键位编辑器
-  const el = e.target.closest('.key');
-  if (!el) return;
   if (previewActive()) {                            // 预览中：点击触发按键类效果，不进键位编辑器
+    const el = e.target.closest('.key');
+    if (!el) return;
     const pslot = Number(el.dataset.slot);
     if (S.lightSel === 4 || S.lightSel === 7) romPreviewKey(pslot, true);   // 模式 12 的按住/抬起由 pointer 事件处理
     return;
   }
+  const knobEl = e.target.closest('.kb-knob');
+  if (knobEl) {
+    if (S.knobOpen) closeEditor(); else openKnobEditor();
+    return;
+  }
+  const el = e.target.closest('.key');
+  if (!el) return;
   const slot = Number(el.dataset.slot);
   if (!Number.isInteger(slot)) return;
   // 再次点击已选中键 = 取消选中
@@ -4666,8 +4835,10 @@ function backupData() {
   if (led && !snapshot) for (const [mode, rgb] of S.ledColorPending) {
     const off = ledColorOffset(mode); led.set(rgb, off);
   }
+  // 宏区：自检快照不含宏，回退到当前内存快照（自检只重写同值，宏内容不变）
+  const macro = (snapshot && snapshot.macro) ? snapshot.macro : S.macroRaw;
   return {
-    format: 'leobog-hi8-backup', version: 2,
+    format: 'leobog-hi8-backup', version: 3,
     date: snapshot ? snapshot.date : new Date().toISOString(),
     model: snapshot ? snapshot.modelName : S.modelName,
     psd: snapshot ? snapshot.psd : S.psd, channel: snapshot ? snapshot.channel : S.channel,
@@ -4675,12 +4846,14 @@ function backupData() {
     keymap: (snapshot ? snapshot.keymap : S.keymap).map(k => k ? toHex(k) : null),
     color: snapshot ? toHex(snapshot.color) : S.color ? toHex(S.color) : null,
     led: led ? toHex(led) : null,
+    macro: macro ? toHex(macro) : null,
   };
 }
 
 function downloadBackup() {
   const data = backupData();
   if (!data.led) Leobog.log('灯效参数块没有可信读回，本次备份不含逐模式精细单色', 'warn');
+  if (!data.macro) Leobog.log('宏区未读取到，本次备份不含宏', 'warn');
   const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -4713,7 +4886,7 @@ $('restoreFile').onchange = async e => {
     if (a.length !== n) throw new Error(`${what} 长度 ${a.length} ≠ ${n}`);
     return a;
   };
-  let km = [null, null, null, null], st = null, col = null, led = null;
+  let km = [null, null, null, null], st = null, col = null, led = null, mac = null;
   try {
     st = parse(o.settings, 128, '设置块');
     col = parse(o.color, 378, '色帧');
@@ -4721,9 +4894,11 @@ $('restoreFile').onchange = async e => {
     if (led && (led[506] !== 0x5a || led[507] !== 0xa5 || !led.some(v => v !== 0)))
       throw new Error('灯效参数块缺少 5A A5 魔数或内容全零');
     for (let i = 0; i < 4; i++) km[i] = o.keymap && o.keymap[i] ? parse(o.keymap[i], 512, `键表页${i}`) : null;
+    mac = parse(o.macro, 512, '宏区');
+    if (mac) { try { Leobog.parseMacroArea(mac); } catch (e) { throw new Error('宏区结构无法解析：' + e.message); } }
   } catch (err) { Leobog.log('备份内容校验失败：' + err.message, 'bad'); return; }
   const items = [st ? '设置' : null, ...km.map((k, i) => k ? `键表页${i}` : null),
-    col ? '色帧' : null, led ? '灯效参数块' : null].filter(Boolean);
+    col ? '色帧' : null, led ? '灯效参数块' : null, mac ? '宏区' : null].filter(Boolean);
   if (!items.length) { Leobog.log('备份里没有可恢复的数据', 'warn'); return; }
   if (!confirm(`恢复 ${o.date} 的备份？型号 ${o.model || '未知'}。\n将写入：${items.join('、')}。\n恢复后立即应用，并读回校验。`)) return;
   if (!beginApplying()) return;
@@ -4744,7 +4919,8 @@ $('restoreFile').onchange = async e => {
   if (st) {
     S.settings = st;
     // 恢复 = 整块覆盖，但保留新鲜读取的字节14（无线标志，设备自管）
-    S.setOps = [{ key: '恢复备份', row: '', fn: b => { const v = b[14]; b.set(st); b[14] = v; } }];
+    // 版本字节 [25] 只读：整块恢复也保留设备当前值。
+    S.setOps = [{ key: '恢复备份', row: '', fn: b => { const v14 = b[14], v25 = b[25]; b.set(st); b[14] = v14; b[25] = v25; } }];
     S.lightOps = []; S.lightSel = st[10];
     S.setDirty = true;
   }
@@ -4755,6 +4931,27 @@ $('restoreFile').onchange = async e => {
   renderKeymap(S.curLayer);
   updateDirtyUI();
   await applyAll({ skipConfirm: true });
+  // 宏区独立于 applyAll：整片重写前 504B（尾 8B 是 flash 页尾标记，不写），读回按槽内容校验
+  if (mac) {
+    if (!beginApplying()) { Leobog.log('宏区未恢复：写入被拒绝或已有任务在进行', 'warn'); return; }
+    try {
+      Leobog.log(`恢复宏区… ${S.channel === 'wireless' ? '无线 0x03' : '有线 0x05'} · 载荷 504 字节`);
+      const r = await Leobog.writeMacro(mac.slice(0, 504));
+      if (r.verified === true) {
+        S.macroRaw = r.readback;
+        closeMacroEditor();                        // 重绘宏网格并丢弃可能残留的旧草稿
+        Leobog.log('宏区已恢复 ✅ 读回按槽内容一致', 'ok');
+      } else if (r.readback) {
+        Leobog.log('宏区 ❌ 读回槽内容不一致，可重新恢复备份', 'bad');
+      } else {
+        Leobog.log('宏区 ⚠️ 已写入但读回失败：' + (r.error || '未知'), 'warn');
+      }
+    } catch (e) {
+      Leobog.log('宏区恢复失败：' + (e.message || e), 'bad');
+    } finally {
+      endApplying();
+    }
+  }
 };
 
 // ── 恢复出厂（固件镜像：设置块 @C400 + Win 键表四页，data/models/*.js 的 factory）────
@@ -4772,7 +4969,8 @@ $('factoryBtn').onclick = async () => {
     S.keymap = fac.keymapWin.map(h => fromHex(h));
     S.kmDirty = [true, true, true, true];
     S.settings = fromHex(fac.settings);
-    S.setOps = [{ key: '恢复出厂', row: '', fn: b => { const v = b[14]; b.set(fromHex(fac.settings)); b[14] = v; } }];
+    // 版本字节 [25] 只读：恢复出厂也保留设备当前值。
+    S.setOps = [{ key: '恢复出厂', row: '', fn: b => { const v14 = b[14], v25 = b[25]; b.set(fromHex(fac.settings)); b[14] = v14; b[25] = v25; } }];
     S.lightOps = []; S.lightSel = S.settings[10];
     S.setDirty = true;
     S.color = new Uint8Array(378);
@@ -5137,7 +5335,10 @@ $('settings').addEventListener('click', e => {
   const name = b.closest('.seg').dataset.seg;
   const val = Number(b.dataset.segVal);
   if (name === 'debounce') $('setDebounce').value = val;
-  else if (name === 'mode') $('setMode').value = val;
+  else if (name === 'mode') {
+    $('setMode').value = val;
+    if (val === 2) Leobog.log('自定义模式需要已安装旋钮扩展固件；原厂固件会把它当作灯效模式', 'warn');
+  }
   else if (name === 'osmode') $('setOsMode').value = val;
   else if (name === 'tapon') $('setTapOn').checked = !!val;
   else if (name === 'sleepon') $('setSleepOn').checked = !!val;
