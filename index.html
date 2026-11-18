@@ -309,17 +309,37 @@
   /* 动作 = 键帽；键帽之间的连接线就是"执行后等待"的延时 */
   .me-keys { display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start;
              gap: 12px 0; min-height: 64px; padding: 16px 2px 2px; border-top: 1px solid var(--line); }
-  .mku { display: inline-flex; align-items: center; }
+  /* 动作区一律不可划选：拖动排序时不会拉出浏览器选区；延时框仍可选中编辑 */
+  #meList { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  #meList .mkd { -webkit-user-select: text; user-select: text; }
+  /* 拖动排序模式：隐藏延时输入，键帽之间补间距 */
+  #meList.drag-mode .mkl { display: none; }
+  #meList.drag-mode .mku { margin-right: 10px; }
+  #meDrag.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .mku { position: relative; display: inline-flex; align-items: center; }
+  .mku.dragging { opacity: .4; }
+  .mkc[draggable="true"] { cursor: grab; }
+  .mkc[draggable="true"]:active { cursor: grabbing; }
+  .mku.drop-before::before, .mku.drop-after::after {
+    content: ''; position: absolute; top: 6px; bottom: 6px; width: 2px;
+    background: var(--accent); border-radius: 1px; pointer-events: none; }
+  .mku.drop-before::before { left: -5px; }
+  .mku.drop-after::after { right: -5px; }
   .mkc { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-         min-width: 46px; max-width: 120px; height: 44px; padding: 0 10px;
+         min-width: 46px; max-width: 136px; height: 44px; padding: 0 10px;
          border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--fg);
-         font: 12.5px/1 ui-monospace, Consolas, monospace; box-shadow: 0 1px 0 rgba(0,0,0,.06);
+         font: 14px/1 ui-monospace, Consolas, monospace; box-shadow: 0 1px 0 rgba(0,0,0,.06);
+         font-weight: 600;
          user-select: none; }
-  .mkc-a { font-size: 12px; opacity: .7; }
+  .mkc-a { font-size: 13px; opacity: .8; }
   .mkc-k { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mkc.down { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-  .mkc.up { color: var(--muted); background: var(--bg); box-shadow: none; }
-  .mkc.mouse::before { content: ''; width: 8px; height: 12px; border: 1px solid currentColor;
+  .mkc.down { border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+              border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+              background: color-mix(in srgb, var(--accent) 9%, var(--card));
+              color: color-mix(in srgb, var(--accent) 72%, var(--fg)); }
+  .mkc.up { color: var(--muted); background: var(--bg); box-shadow: none;
+            color: color-mix(in srgb, var(--muted) 62%, var(--fg)); }
+  .mkc.mouse::before { content: ''; width: 9px; height: 14px; border: 1px solid currentColor;
                        border-radius: 5px; opacity: .5; background-image: linear-gradient(currentColor, currentColor);
                        background-size: 1.5px 3px; background-position: 50% 2px; background-repeat: no-repeat; }
   .mkc .mkc-x { position: absolute; top: -7px; right: -7px; width: 17px; height: 17px; margin: 0; padding: 0;
@@ -332,7 +352,7 @@
                 border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted);
                 font: 12px ui-monospace, Consolas, monospace; }
   .mkl.long input.mkd { color: var(--warn); border-color: var(--warn); }
-  .mkc.plus { border-style: dashed; color: var(--muted); cursor: pointer; font-size: 17px; padding: 0; }
+  .mkc.plus { border-style: dashed; color: var(--muted); cursor: pointer; font-size: 18px; padding: 0; }
   .mkc.plus:hover { border-color: var(--accent); color: var(--accent); }
   .me-empty { padding: 4px 10px 4px 0; color: var(--muted); font-size: 13px; }
   /* 统一延时：自绘勾选框，勾上时 ✔ 亮起 */
@@ -743,6 +763,7 @@
                 <input id="meName" class="me-name" maxlength="16" placeholder="宏名称" title="宏名称，会写进键盘，最多 16 字">
                 <button type="button" id="meRec" title="开始录制：直接在键盘上按，自动记录按键与间隔">● 录制</button>
                 <button type="button" id="meAddKey" title="打开 104 键盘图挑键，鼠标键在方向键区">添加按键</button>
+                <button type="button" id="meDrag" title="开启后按住键帽拖动可调整动作顺序，此时隐藏延时输入">拖动排序</button>
                 <button type="button" id="meClear" title="清空这个宏的所有动作">清空</button>
                 <span class="me-grow"></span>
                 <button type="button" id="meSave" class="primary" title="写入键盘并读回校验">保存</button>

@@ -1949,12 +1949,6 @@ function macroKeyName(key, flags) {
   return USAGE[key] || ('0x' + key.toString(16).padStart(2, '0'));
 }
 
-function describeEvents(events) {
-  // 每个事件带自己的延时（设备里逐事件存 ms），例如「↓A 200ms · ↑A 300ms」
-  const seq = events.map(e => (e.flags & 0x80 ? '↑' : '↓') + macroKeyName(e.key, e.flags) + (e.delay ? ' ' + e.delay + 'ms' : ''));
-  return seq.slice(0, 12).join(' · ') + (events.length > 12 ? ' …' : '');
-}
-
 function renderMacro() {
   const raw = S.macroRaw;
   if (!raw) { $('macro').innerHTML = '<span class="bad">宏区不可用</span>'; return; }
@@ -2028,9 +2022,10 @@ function renderMacroDraft() {
     const label = isMouse ? (MK_SHORT[e.key] || ('鼠' + e.key)) : macroKeyName(e.key, e.flags);
     const cls = ['mkc', isUp ? 'up' : 'down', isMouse ? 'mouse' : '', isMod ? 'mod' : '']
       .filter(Boolean).join(' ');
+    const dragAttr = macroDragMode ? ` draggable="true" data-i="${i}"` : '';
     return `<span class="mku">
-      <span class="${cls}" title="第 ${i + 1} 个动作 · ${isUp ? '抬起' : '按下'} ${mkEsc(label)} · 约第 ${(at / 1000).toFixed(2)} 秒">
-        <span class="mkc-a">${isUp ? '↑' : '↓'}</span><span class="mkc-k">${mkEsc(label)}</span>
+      <span class="${cls}"${dragAttr} title="第 ${i + 1} 个动作 · ${isUp ? '抬起' : '按下'} ${mkEsc(label)} · 约第 ${(at / 1000).toFixed(2)} 秒${macroDragMode ? ' · 可拖动调序' : ''}">
+        <span class="mkc-a">${isUp ? '▲' : '▼'}</span><span class="mkc-k">${mkEsc(label)}</span>
         <button type="button" class="mkc-x" data-rm="${i}" title="删除这个动作">×</button>
       </span>
       <span class="mkl${e.delay >= 1000 ? ' long' : ''}">
@@ -2053,6 +2048,7 @@ function openMacroEditor(slot, existing) {
   macroRecStop();
   if (mpOpen) mpShow(false);
   $('meUni').checked = false;                 // 统一延时是"一次性动作"，每次开编辑器都复位
+  setMacroDragMode(false);                    // 拖动排序默认关闭
   S.macroEditSlot = slot;
   S.macroDraft = {
     name: existing ? existing.name : ('宏' + (slot + 1)),
@@ -2296,6 +2292,15 @@ $('meSave').onclick = saveMacroToKeyboard;
 $('meCancel').onclick = closeMacroEditor;
 $('meRec').onclick = () => { if (macroRec) macroRecStop(); else macroRecStart(true); };
 $('meAddKey').onclick = () => mpShow(!mpOpen);
+// 拖动排序开关：默认关闭；开启后键帽才可拖，延时输入框隐藏
+let macroDragMode = false;
+function setMacroDragMode(on) {
+  macroDragMode = !!on;
+  const btn = $('meDrag'), list = $('meList');
+  if (btn) btn.classList.toggle('on', macroDragMode);
+  if (list) list.classList.toggle('drag-mode', macroDragMode);
+}
+$('meDrag').onclick = () => { setMacroDragMode(!macroDragMode); renderMacroDraft(); };
 $('meClear').onclick = () => { if (S.macroDraft) { S.macroDraft.events = []; renderMacroDraft(); } };
 
 // 统一延时：勾上（或勾着时改数字）→ 把当前所有事件的延时刷成同一个值
@@ -2327,6 +2332,68 @@ $('meList').addEventListener('input', e => {
   if (box) box.classList.toggle('long', v >= 1000);
   const total = S.macroDraft.events.reduce((n, x) => n + (x.delay || 0), 0);
   $('meInfo').textContent = `${S.macroDraft.events.length} 个动作 · 约 ${(total / 1000).toFixed(1)} 秒`;
+});
+
+// ── 拖动调整动作顺序：只重排 events，每条动作的延时跟着它自己走；松手重绘 ──
+let dragFrom = -1, dropAt = -1, dragDownEl = null;
+$('meList').addEventListener('pointerdown', e => { dragDownEl = e.target; });
+$('meList').addEventListener('dragstart', e => {
+  dragFrom = -1;
+  const cap = e.target.closest('.mkc');
+  if (!S.macroDraft || !cap || !cap.hasAttribute('draggable')) { e.preventDefault(); return; }
+  if (dragDownEl && dragDownEl.closest('.mkc-x')) { e.preventDefault(); return; }   // 从删除按钮起拖不算
+  const i = Number(cap.dataset.i);
+  if (!Number.isInteger(i) || i < 0) { e.preventDefault(); return; }
+  dragFrom = i;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(i));
+  const unit = cap.closest('.mku');
+  if (unit) unit.classList.add('dragging');
+});
+$('meList').addEventListener('dragover', e => {
+  if (dragFrom < 0 || !S.macroDraft) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const list = $('meList');
+  const clear = () => list.querySelectorAll('.mku.drop-before, .mku.drop-after')
+    .forEach(el => el.classList.remove('drop-before', 'drop-after'));
+  // 不用 closest 定位：鼠标落在动作间隙或空白时 closest 为 null，会把落点错误地甩到末尾。
+  // 改为按"鼠标所在行 + 每个动作的水平中心"算插入序号，任何位置都有确定落点。
+  const caps = [...list.querySelectorAll('.mku')]
+    .map(u => ({ u, cap: u.querySelector('.mkc'), r: u.getBoundingClientRect() }))
+    .filter(o => o.cap && !o.cap.classList.contains('plus'));
+  clear();
+  if (!caps.length) { dropAt = 0; return; }
+  let best = caps[0], bd = Infinity;
+  for (const o of caps) {
+    const d = Math.abs(e.clientY - (o.r.top + o.r.height / 2));
+    if (d < bd) { bd = d; best = o; }
+  }
+  const rowTop = best.r.top;
+  const row = caps.filter(o => Math.abs(o.r.top - rowTop) < 4);   // 同一行（多行时按行判定）
+  let at = caps.indexOf(row[row.length - 1]) + 1;
+  for (const o of row) if (e.clientX < o.r.left + o.r.width / 2) { at = caps.indexOf(o); break; }
+  dropAt = at;
+  // 落点等于原位或原位之后 → 松手不会改变顺序，此时不画线，避免出现无效的插入光标
+  if (at === dragFrom || at === dragFrom + 1) return;
+  const inRow = at < caps.length && Math.abs(caps[at].r.top - rowTop) < 4;
+  const anchor = inRow ? caps[at].u : caps[at - 1].u;
+  if (anchor) anchor.classList.add(inRow ? 'drop-before' : 'drop-after');
+});
+$('meList').addEventListener('drop', e => {
+  if (dragFrom < 0 || dropAt < 0 || !S.macroDraft) return;
+  e.preventDefault();
+  const evts = S.macroDraft.events;
+  if (dragFrom < evts.length && dropAt !== dragFrom && dropAt !== dragFrom + 1) {
+    const [item] = evts.splice(dragFrom, 1);
+    evts.splice(dropAt > dragFrom ? dropAt - 1 : dropAt, 0, item);
+    renderMacroDraft();
+  }
+});
+$('meList').addEventListener('dragend', () => {
+  dragFrom = -1; dropAt = -1; dragDownEl = null;
+  $('meList').querySelectorAll('.mku.dragging, .mku.drop-before, .mku.drop-after')
+    .forEach(el => el.classList.remove('dragging', 'drop-before', 'drop-after'));
 });
 
 // ── 音乐律动（有线 0x08 整帧 / 无线 0x88 TLV全量快照；系统音频 → 频谱）──
