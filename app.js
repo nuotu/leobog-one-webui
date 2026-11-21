@@ -167,7 +167,7 @@ function fwCap() {
   return FW_CAPS.get(fwTag()) || { label: '基础版', knob: false };
 }
 function knobSupported() {
-  return S.modelName === 'Hi8' && fwCap().knob;
+  return (S.modelName === 'Hi8' || S.modelName === 'Hi8SE') && fwCap().knob;
 }
 let lastFwLogKey = '';
 function logFwKind() {
@@ -196,7 +196,7 @@ function knobModeInfo() {
   return KNOB_MODE_STYLE[raw] || KNOB_MODE_STYLE[1];
 }
 function knobTitle(info) {
-  return S.modelName === 'Hi8' ? `旋钮：${info.name}；点击编辑自定义绑定` : `旋钮：${info.name}`;
+  return knobSupported() ? `旋钮：${info.name}；点击编辑自定义绑定` : `旋钮：${info.name}`;
 }
 
 // KeyboardEvent.code → HID usage（物理键捕获用；标准 HID 键盘页）
@@ -4337,7 +4337,6 @@ function setEditorEnabled(on) {
 
 function openKnobEditor() {
   if (!knobSupported()) { Leobog.log('当前固件未标记为旋钮版，已隐藏旋钮功能', 'warn'); return; }
-  if (S.modelName !== 'Hi8') { Leobog.log('当前型号未支持旋钮自定义', 'warn'); return; }
   if (S.curLayer === 3) { Leobog.log('Tap 层不适用旋钮自定义', 'warn'); return; }
   if (!S.keymap[S.curLayer]) { Leobog.log('该层键表未读取，暂时无法编辑旋钮绑定', 'warn'); return; }
   S.knobOpen = true;
