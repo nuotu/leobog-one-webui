@@ -654,7 +654,7 @@ window.Leobog = (function () {
     return await wlRead(0x42, 0x1b, 1800, { expect: 27, strict: true, minBytes: 378, retries: 3 });
   }
 
-  // ── 宏区格式（逆向指南 §8.4）────────────────────────────────
+  // ── 宏区格式（分析指南 §8.4）────────────────────────────────
   // 目录 = (offset_LE16, length_LE16)；offset 相对载荷起点；
   // 写载荷 = 紧凑目录（已用槽×4B）+ 记录（官方实测：单宏载荷 dir=4B、双宏 dir=8B）；
   // 读回可能是满 8 槽目录（offset[0]=32，固件 flash 形态）——解析时以 offset[0] 为目录长。
